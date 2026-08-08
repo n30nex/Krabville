@@ -1,11 +1,31 @@
 import Phaser from "phaser";
 
-import type { KrabvilleState, Point, Resident } from "./types";
+import type { KrabvilleState, Point, PropertySummary, Resident } from "./types";
 
-const WORLD_WIDTH = 1774;
-const WORLD_HEIGHT = 887;
+const WORLD_WIDTH = 3072;
+const WORLD_HEIGHT = 2048;
+const LEGACY_WORLD_WIDTH = 1774;
+const LEGACY_WORLD_HEIGHT = 887;
 const TICK_SECONDS = 12.5;
 const STEP_DISTANCE = 38;
+
+const LEGACY_PRESSURE_NEEDS = new Set(["hunger", "social"]);
+const NEED_BADGES: Record<string, string> = {
+  energy: "EN",
+  hunger: "FOOD",
+  hygiene: "WASH",
+  health: "HP",
+  comfort: "COMF",
+  safety: "SAFE",
+  fun: "FUN",
+  social: "SOC",
+  belonging: "BEL",
+  privacy: "PRIV",
+  purpose: "GOAL",
+  autonomy: "FREE",
+  financialSecurity: "CASH",
+  financial_security: "CASH",
+};
 
 const LOCATIONS: Record<string, Point> = {
   "Town Square": [885, 430],
@@ -59,11 +79,49 @@ interface ResidentView {
   sprite: Phaser.GameObjects.Sprite;
   label: Phaser.GameObjects.Text;
   thought: Phaser.GameObjects.Text;
+  needSignal: Phaser.GameObjects.Text;
   resident: Resident;
   updatedTick: number;
+  decisionKey: string;
+  atlas: string;
+  animationKey: string;
+  thoughtTimer?: Phaser.Time.TimerEvent;
 }
 
-function projectedPosition(resident: Resident): Point {
+function needSatisfaction(resident: Resident, key: string): number {
+  const value = Phaser.Math.Clamp(Number(resident.needs[key] ?? 100), 0, 100);
+  const modernNeeds = Object.keys(resident.needs).some((name) => !["energy", "hunger", "social", "purpose", "comfort"].includes(name));
+  return resident.needsHighIsGood || modernNeeds || !LEGACY_PRESSURE_NEEDS.has(key) ? value : 100 - value;
+}
+
+function urgentNeedKeys(resident: Resident): string[] {
+  const explicit = resident.pondering?.urgentNeeds ?? resident.urgentNeeds;
+  if (explicit?.length) return explicit.slice(0, 2);
+  return Object.keys(resident.needs)
+    .map((key) => [key, needSatisfaction(resident, key)] as const)
+    .filter(([, value]) => value < 32)
+    .sort((left, right) => left[1] - right[1])
+    .slice(0, 2)
+    .map(([key]) => key);
+}
+
+function decisionKey(resident: Resident): string {
+  return [resident.activity, resident.intention, resident.destinationX, resident.destinationY].join("|");
+}
+
+function usesMapCoordinates(state: KrabvilleState): boolean {
+  return state.world?.coordinateSpace === "map" || (state.schemaVersion >= 3 && state.world?.coordinateSpace !== "legacy");
+}
+
+function projectLegacyPoint([x, y]: Point): Point {
+  return [x * WORLD_WIDTH / LEGACY_WORLD_WIDTH, y * WORLD_HEIGHT / LEGACY_WORLD_HEIGHT];
+}
+
+function projectPoint(point: Point, state: KrabvilleState): Point {
+  return usesMapCoordinates(state) ? point : projectLegacyPoint(point);
+}
+
+function projectedPosition(resident: Resident, state: KrabvilleState): Point {
   let x = resident.x;
   let y = resident.y;
   let remaining = STEP_DISTANCE;
@@ -82,10 +140,21 @@ function projectedPosition(resident: Resident): Point {
     }
     break;
   }
-  return [x, y];
+  return projectPoint([x, y], state);
 }
 
 type ResidentPeekHandler = (resident: Resident | null, x?: number, y?: number) => void;
+type BuildingFocusHandler = (location: string) => void;
+
+const LIFE_STAGE_ROWS: Record<string, number> = { baby: 0, child: 1, teen: 2, senior: 3 };
+
+function spriteSpec(resident: Resident, index: number): { atlas: string; row: number; animationKey: string } {
+  const lifeStage = resident.lifeStage?.toLowerCase() ?? "adult";
+  const lifeRow = LIFE_STAGE_ROWS[lifeStage];
+  const atlas = lifeRow === undefined ? (index < 6 ? "residents-a" : "residents-b") : "life-stages";
+  const row = lifeRow ?? index % 6;
+  return { atlas, row, animationKey: `walk-${resident.slug}-${atlas}-${row}` };
+}
 
 class LagoonScene extends Phaser.Scene {
   private state: KrabvilleState | null = null;
@@ -95,6 +164,7 @@ class LagoonScene extends Phaser.Scene {
   private weatherLayer!: Phaser.GameObjects.Container;
   private lightLayer!: Phaser.GameObjects.Container;
   private propLayer!: Phaser.GameObjects.Container;
+  private buildingLayer!: Phaser.GameObjects.Container;
   private minimap!: Phaser.Cameras.Scene2D.Camera;
   private dragging = false;
   private previousPointer: Point = [0, 0];
@@ -104,12 +174,13 @@ class LagoonScene extends Phaser.Scene {
   constructor(
     private readonly onSelect: (slug: string) => void,
     private readonly onPeek: ResidentPeekHandler,
+    private readonly onBuildingFocus: BuildingFocusHandler,
   ) {
     super("lagoon");
   }
 
   preload(): void {
-    this.load.image("lagoon-map", "/assets/krabville-map.webp");
+    this.load.image("lagoon-map", "/assets/kvsim-town-v2.webp");
     this.load.spritesheet("residents-a", "/assets/residents-a.png", {
       frameWidth: 192,
       frameHeight: 192,
@@ -118,12 +189,31 @@ class LagoonScene extends Phaser.Scene {
       frameWidth: 192,
       frameHeight: 192,
     });
+    this.load.spritesheet("life-stages", "/assets/life-stages-v2.png", {
+      frameWidth: 192,
+      frameHeight: 192,
+    });
+    this.load.spritesheet("interiors", "/assets/interiors-v2.png", {
+      frameWidth: 256,
+      frameHeight: 256,
+    });
   }
 
   create(): void {
+    const source = this.textures.get("lagoon-map").getSourceImage() as { width: number; height: number };
+    if (source.width !== WORLD_WIDTH || source.height !== WORLD_HEIGHT) {
+      throw new Error(`KVsim town map must be ${WORLD_WIDTH}x${WORLD_HEIGHT}, received ${source.width}x${source.height}`);
+    }
+    const worldElement = document.getElementById("world");
+    if (worldElement) {
+      worldElement.dataset.mapAsset = "/assets/kvsim-town-v2.webp";
+      worldElement.dataset.worldWidth = String(WORLD_WIDTH);
+      worldElement.dataset.worldHeight = String(WORLD_HEIGHT);
+    }
     this.add.image(0, 0, "lagoon-map").setOrigin(0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.propLayer = this.add.container(0, 0).setDepth(70);
+    this.buildingLayer = this.add.container(0, 0).setDepth(45);
     this.lightLayer = this.add.container(0, 0).setDepth(80);
     this.weatherLayer = this.add.container(0, 0).setDepth(90);
     this.lighting = this.add
@@ -135,7 +225,7 @@ class LagoonScene extends Phaser.Scene {
       .add(Math.max(8, this.scale.width - 190), Math.max(8, this.scale.height - 102), 180, 92)
       .setName("minimap")
       .setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
-      .setZoom(0.1)
+      .setZoom(Math.min(180 / WORLD_WIDTH, 92 / WORLD_HEIGHT))
       .centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
       .setBackgroundColor("rgba(3,12,18,.82)");
     this.fillMap();
@@ -178,10 +268,7 @@ class LagoonScene extends Phaser.Scene {
     );
   }
 
-  private createResident(resident: Resident, index: number): ResidentView {
-    const atlas = index < 6 ? "residents-a" : "residents-b";
-    const row = index % 6;
-    const animationKey = `walk-${resident.slug}`;
+  private ensureWalkAnimation(atlas: string, row: number, animationKey: string): void {
     if (!this.anims.exists(animationKey)) {
       this.anims.create({
         key: animationKey,
@@ -190,6 +277,11 @@ class LagoonScene extends Phaser.Scene {
         repeat: -1,
       });
     }
+  }
+
+  private createResident(resident: Resident, index: number, state: KrabvilleState): ResidentView {
+    const { atlas, row, animationKey } = spriteSpec(resident, index);
+    this.ensureWalkAnimation(atlas, row, animationKey);
     const ring = this.add.circle(0, 24, 25, Phaser.Display.Color.HexStringToColor(resident.color).color, 0.28);
     ring.setStrokeStyle(2, 0xffffff, 0.7);
     const sprite = this.add.sprite(0, 0, atlas, row * 4).setDisplaySize(62, 62).setInteractive({ useHandCursor: true });
@@ -213,8 +305,21 @@ class LagoonScene extends Phaser.Scene {
         align: "center",
       })
       .setOrigin(0.5, 1)
+      .setAlpha(0)
       .setVisible(false);
-    const container = this.add.container(resident.x, resident.y, [ring, sprite, label, thought]).setDepth(50 + resident.y / 1000);
+    const needSignal = this.add
+      .text(0, -39, "", {
+        fontFamily: "Inter, Segoe UI, sans-serif",
+        fontSize: "9px",
+        fontStyle: "bold",
+        color: "#fff7eb",
+        backgroundColor: "rgba(177,49,58,.94)",
+        padding: { x: 5, y: 3 },
+      })
+      .setOrigin(0.5, 1)
+      .setVisible(false);
+    const [x, y] = projectPoint([resident.x, resident.y], state);
+    const container = this.add.container(x, y, [ring, sprite, label, needSignal, thought]).setDepth(50 + y / WORLD_HEIGHT);
     const showPeek = (pointer: Phaser.Input.Pointer) => {
       this.onPeek(this.residents.get(resident.slug)?.resident ?? resident, pointer.x, pointer.y);
     };
@@ -227,46 +332,101 @@ class LagoonScene extends Phaser.Scene {
       this.selectResident(resident.slug);
       this.onSelect(resident.slug);
     });
-    return { container, sprite, label, thought, resident, updatedTick: resident.updatedTick - 1 };
+    return {
+      container,
+      sprite,
+      label,
+      thought,
+      needSignal,
+      resident,
+      updatedTick: resident.updatedTick,
+      decisionKey: decisionKey(resident),
+      atlas,
+      animationKey,
+    };
+  }
+
+  private showThought(view: ResidentView, text: string): void {
+    if (!text.trim()) return;
+    view.thoughtTimer?.remove(false);
+    view.thought.setText(text).setVisible(true).setAlpha(1);
+    document.getElementById("world")?.setAttribute("aria-label", `${view.resident.name} is pondering: ${text}`);
+    view.thoughtTimer = this.time.delayedCall(6000, () => {
+      if (this.reducedMotion) {
+        view.thought.setVisible(false);
+        return;
+      }
+      this.tweens.add({
+        targets: view.thought,
+        alpha: 0,
+        duration: 280,
+        onComplete: () => view.thought.setVisible(false),
+      });
+    });
   }
 
   applyState(state: KrabvilleState): void {
     this.state = state;
     if (!this.sys.isActive()) return;
+    const projectedPoints = state.residents.flatMap((resident) => [
+      projectPoint([resident.x, resident.y], state),
+      ...resident.path.map((point) => projectPoint(point, state)),
+    ]);
+    const worldElement = document.getElementById("world");
+    if (worldElement) {
+      worldElement.dataset.coordinateSpace = usesMapCoordinates(state) ? "map" : "projected-legacy";
+      worldElement.dataset.pathsInBounds = String(projectedPoints.every(([x, y]) => x >= 0 && x <= WORLD_WIDTH && y >= 0 && y <= WORLD_HEIGHT));
+    }
     const active = new Set<string>();
     state.residents.forEach((resident, index) => {
       active.add(resident.slug);
       let view = this.residents.get(resident.slug);
       if (!view) {
-        view = this.createResident(resident, index);
+        view = this.createResident(resident, index, state);
         this.residents.set(resident.slug, view);
       }
+      const spec = spriteSpec(resident, index);
+      if (view.atlas !== spec.atlas || view.animationKey !== spec.animationKey) {
+        this.ensureWalkAnimation(spec.atlas, spec.row, spec.animationKey);
+        view.sprite.setTexture(spec.atlas, spec.row * 4);
+        view.atlas = spec.atlas;
+        view.animationKey = spec.animationKey;
+      }
+      const nextDecisionKey = decisionKey(resident);
+      const changedDecision = view.decisionKey !== nextDecisionKey;
       view.resident = resident;
+      view.decisionKey = nextDecisionKey;
       view.label.setText(resident.name.split(" ")[0] ?? resident.name);
-      view.thought.setText(resident.publicThought);
-      view.thought.setVisible(this.selectedSlug === resident.slug);
+      const urgent = urgentNeedKeys(resident);
+      view.needSignal.setText(urgent.map((key) => NEED_BADGES[key] ?? key.slice(0, 4).toUpperCase()).join(" + "));
+      view.needSignal.setVisible(urgent.length > 0);
+      if (resident.pondering?.active || changedDecision) {
+        this.showThought(view, resident.pondering?.thought || resident.publicThought || resident.intention);
+      }
       if (view.updatedTick === resident.updatedTick) return;
       view.updatedTick = resident.updatedTick;
       this.tweens.killTweensOf(view.container);
-      if (Math.hypot(view.container.x - resident.x, view.container.y - resident.y) > STEP_DISTANCE * 2) {
-        view.container.setPosition(resident.x, resident.y);
+      const [currentX, currentY] = projectPoint([resident.x, resident.y], state);
+      if (Math.hypot(view.container.x - currentX, view.container.y - currentY) > 180) {
+        view.container.setPosition(currentX, currentY);
       }
-      const [targetX, targetY] = projectedPosition(resident);
-      const moving = resident.path.length > 0 && Math.hypot(targetX - resident.x, targetY - resident.y) > 1;
-      view.container.setDepth(50 + targetY / 1000);
+      const [targetX, targetY] = projectedPosition(resident, state);
+      const moving = resident.path.length > 0 && Math.hypot(targetX - currentX, targetY - currentY) > 1;
+      view.container.setDepth(50 + targetY / WORLD_HEIGHT);
       if (moving && !this.reducedMotion) {
-        view.sprite.play(`walk-${resident.slug}`, true);
-        view.sprite.setFlipX(targetX < resident.x);
+        view.sprite.play(view.animationKey, true);
+        view.sprite.setFlipX(targetX < currentX);
         this.tweens.add({
           targets: view.container,
           x: targetX,
           y: targetY,
           duration: TICK_SECONDS * 1000,
+          delay: changedDecision && !this.reducedMotion ? 850 : 0,
           ease: "Linear",
         });
       } else {
         view.sprite.stop();
-        view.container.setPosition(resident.x, resident.y);
+        view.container.setPosition(currentX, currentY);
       }
     });
     for (const [slug, view] of this.residents) {
@@ -278,6 +438,44 @@ class LagoonScene extends Phaser.Scene {
     this.updateLighting(state);
     this.updateWeather(state.season?.weather.condition ?? "clear");
     this.updateProps(state);
+    this.updateBuildings(state);
+    this.updateObjectScale();
+  }
+
+  private updateBuildings(state: KrabvilleState): void {
+    this.buildingLayer.removeAll(true);
+    const buildings: PropertySummary[] = state.buildings?.length
+      ? state.buildings.filter((building) => building.interiorAvailable || building.x !== undefined)
+      : ["Hobbs Cafe", "Lagoon Library", "Lagoon Clinic", "Radio Shack", "Harbour Office"].map((name) => ({ name, interiorAvailable: true }));
+    for (const building of buildings.slice(0, 18)) {
+      const point = building.x !== undefined && building.y !== undefined
+        ? projectPoint([building.x, building.y], state)
+        : this.locationPoint(building.name, state);
+      if (!point) continue;
+      const marker = this.add.circle(0, 0, 7, 0x63d8e3, 0.8).setStrokeStyle(2, 0xe8fbff, 0.9).setInteractive({ useHandCursor: true });
+      const label = this.add.text(0, -13, building.interiorAvailable ? `${building.name}  |  VIEW INSIDE` : building.name, {
+        fontFamily: "Inter, Segoe UI, sans-serif",
+        fontSize: "10px",
+        color: "#eafcff",
+        backgroundColor: "rgba(4,15,20,.92)",
+        padding: { x: 5, y: 3 },
+      }).setOrigin(0.5, 1).setVisible(false);
+      marker.on("pointerover", () => label.setVisible(true));
+      marker.on("pointerout", () => label.setVisible(false));
+      marker.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        pointer.event.stopPropagation();
+        this.focusLocation(building.name, point);
+        this.onBuildingFocus(building.name);
+      });
+      this.buildingLayer.add(this.add.container(point[0], point[1] - 14, [marker, label]));
+    }
+  }
+
+  private locationPoint(location: string, state = this.state): Point | undefined {
+    const building = state?.buildings?.find((item) => item.name === location);
+    if (state && building?.x !== undefined && building.y !== undefined) return projectPoint([building.x, building.y], state);
+    const legacy = LOCATIONS[location];
+    return legacy ? projectLegacyPoint(legacy) : undefined;
   }
 
   private updateLighting(state: KrabvilleState): void {
@@ -291,7 +489,7 @@ class LagoonScene extends Phaser.Scene {
     if (darkness < 0.12) return;
     const occupied = new Set(state.residents.map((resident) => resident.location));
     for (const location of occupied) {
-      const point = LOCATIONS[location];
+      const point = this.locationPoint(location, state);
       if (!point) continue;
       const glow = this.add.circle(point[0], point[1] - 18, 20, 0xffc85f, Math.min(0.62, darkness + 0.12));
       glow.setBlendMode(Phaser.BlendModes.ADD);
@@ -333,7 +531,7 @@ class LagoonScene extends Phaser.Scene {
   private updateProps(state: KrabvilleState): void {
     this.propLayer.removeAll(true);
     for (const prop of state.props) {
-      const point = LOCATIONS[prop.location] ?? LOCATIONS["Town Square"];
+      const point = this.locationPoint(prop.location, state) ?? this.locationPoint("Town Square", state);
       if (!point) continue;
       const marker = this.add.rectangle(0, 0, 13, 13, 0xffc857, 0.92).setRotation(Math.PI / 4);
       marker.setStrokeStyle(2, 0x17323c, 1);
@@ -357,7 +555,7 @@ class LagoonScene extends Phaser.Scene {
   selectResident(slug: string | null): void {
     this.selectedSlug = slug;
     for (const [residentSlug, view] of this.residents) {
-      view.thought.setVisible(residentSlug === slug);
+      if (residentSlug === slug && !view.thought.visible) this.showThought(view, view.resident.publicThought || view.resident.intention);
     }
     if (slug) {
       const view = this.residents.get(slug);
@@ -365,8 +563,32 @@ class LagoonScene extends Phaser.Scene {
     }
   }
 
+  private minimumZoom(): number {
+    return Math.max(0.12, Math.min(this.scale.width / WORLD_WIDTH, this.scale.height / WORLD_HEIGHT));
+  }
+
+  private updateObjectScale(): void {
+    const scale = Phaser.Math.Clamp(0.9 / this.cameras.main.zoom, 0.78, 3.1);
+    for (const view of this.residents.values()) view.container.setScale(scale);
+    for (const child of [...this.buildingLayer.list, ...this.propLayer.list]) {
+      if (child instanceof Phaser.GameObjects.Container) child.setScale(scale);
+    }
+  }
+
+  focusLocation(location: string, explicitPoint?: Point): void {
+    const point = explicitPoint ?? this.locationPoint(location);
+    if (!point) return;
+    this.setZoom(Math.max(this.cameras.main.zoom, 1.05));
+    this.cameras.main.pan(point[0], point[1], this.reducedMotion ? 0 : 500, "Sine.easeInOut");
+    const element = document.getElementById("world");
+    if (element) element.dataset.focusedLocation = location;
+  }
+
   setZoom(value: number): void {
-    this.cameras.main.setZoom(Phaser.Math.Clamp(value, 0.42, 1.65));
+    this.cameras.main.setZoom(Phaser.Math.Clamp(value, this.minimumZoom(), 1.8));
+    const element = document.getElementById("world");
+    if (element) element.dataset.cameraZoom = this.cameras.main.zoom.toFixed(4);
+    this.updateObjectScale();
   }
 
   zoomBy(factor: number): void {
@@ -374,13 +596,18 @@ class LagoonScene extends Phaser.Scene {
   }
 
   fitMap(): void {
-    const zoom = Math.min(this.scale.width / WORLD_WIDTH, this.scale.height / WORLD_HEIGHT);
-    this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, 0.42, 1.15)).centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    this.cameras.main.setZoom(this.minimumZoom()).centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    const element = document.getElementById("world");
+    if (element) element.dataset.cameraZoom = this.cameras.main.zoom.toFixed(4);
+    this.updateObjectScale();
   }
 
   private fillMap(): void {
     const zoom = Math.max(this.scale.width / WORLD_WIDTH, this.scale.height / WORLD_HEIGHT);
-    this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, 0.42, 1.15)).centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    this.cameras.main.setZoom(Phaser.Math.Clamp(zoom, this.minimumZoom(), 1.15)).centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    const element = document.getElementById("world");
+    if (element) element.dataset.cameraZoom = this.cameras.main.zoom.toFixed(4);
+    this.updateObjectScale();
   }
 }
 
@@ -388,8 +615,8 @@ export class LagoonWorld {
   private readonly scene: LagoonScene;
   private readonly game: Phaser.Game;
 
-  constructor(parent: string, onSelect: (slug: string) => void, onPeek: ResidentPeekHandler) {
-    this.scene = new LagoonScene(onSelect, onPeek);
+  constructor(parent: string, onSelect: (slug: string) => void, onPeek: ResidentPeekHandler, onBuildingFocus: BuildingFocusHandler) {
+    this.scene = new LagoonScene(onSelect, onPeek, onBuildingFocus);
     const element = document.getElementById(parent);
     if (!element) throw new Error("map parent missing");
     this.game = new Phaser.Game({
@@ -430,5 +657,9 @@ export class LagoonWorld {
 
   fit(): void {
     this.scene.fitMap();
+  }
+
+  focus(location: string): void {
+    this.scene.focusLocation(location);
   }
 }

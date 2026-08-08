@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from krabville.inference import FakeProvider, _assert_no_tool_events, _validate, process_one, run_worker
-from krabville.world import start_season, stop_now
+from krabville.world import _queue_job, start_season, stop_now
 
 
 class FallbackProvider:
@@ -70,6 +70,15 @@ def test_call_150_can_start_but_151_cannot(settings_factory) -> None:
         )
     assert process_one(connection, settings, FakeProvider())
     assert connection.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0] == 150
+    _queue_job(
+        connection,
+        season_id,
+        0,
+        1,
+        "season_opener",
+        0,
+        {"budgetProof": "attempt-151"},
+    )
     assert process_one(connection, settings, FakeProvider())
     assert connection.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0] == 150
     assert connection.execute("SELECT model_degraded FROM seasons WHERE id=?", (season_id,)).fetchone()[0] == 1

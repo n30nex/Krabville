@@ -22,6 +22,17 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
         assert str(settings.database_path) not in serialized
         assert len(payload["residents"]) == 12
         assert payload["models"]["primary"] == "gpt-5.3-codex-spark"
+        v3 = client.get("/api/v3/state")
+        assert v3.status_code == 200
+        modern = v3.json()
+        assert modern["schemaVersion"] == 3
+        assert modern["world"]["mapAsset"] == "/assets/kvsim-town-v2.webp"
+        assert modern["poll"] is None
+        assert modern["residents"][0]["needsHighIsGood"] is True
+        assert modern["residents"][0]["lifeStage"] in {"baby", "child", "teen", "adult", "senior"}
+        detail = client.get(f"/api/v3/residents/{modern['residents'][0]['slug']}")
+        assert detail.status_code == 200
+        assert "finances" in detail.json()
 
 
 def test_vote_requires_cookie_csrf_and_allows_choice_change(settings_factory) -> None:

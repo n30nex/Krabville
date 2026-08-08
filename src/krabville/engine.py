@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import signal
 import threading
 import time
@@ -57,6 +58,26 @@ class Engine:
             generate_report(connection, int(season["id"]), self.settings)
             connection.commit()
 
+    def _continue_if_due(self, connection) -> dict[str, Any] | None:
+        season = connection.execute(
+            "SELECT number,status,completed_at,completion_reason FROM seasons ORDER BY number DESC LIMIT 1"
+        ).fetchone()
+        if (
+            not season
+            or season["status"] != "complete"
+            or season["completion_reason"] != "natural"
+            or not self.settings.auto_continue
+            or int(season["number"]) >= self.settings.season_limit
+        ):
+            return None
+        completed_at = dt.datetime.fromisoformat(str(season["completed_at"]))
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=dt.timezone.utc)
+        elapsed = (dt.datetime.now(dt.timezone.utc) - completed_at).total_seconds()
+        if elapsed < self.settings.intermission_seconds:
+            return None
+        return start_season(connection)
+
     def _control(self, callback):
         connection = connect(self.settings.database_path)
         try:
@@ -97,6 +118,9 @@ class Engine:
                 queue_conversation_if_needed(self.connection)
             if result.get("status") == "complete":
                 self._ensure_report(self.connection)
+                continued = self._continue_if_due(self.connection)
+                if continued:
+                    result = {"advanced": False, "status": "running", **continued}
             deadline += self.settings.tick_seconds
             wait = deadline - time.monotonic()
             if not result.get("advanced"):

@@ -38,6 +38,11 @@ class Settings:
     inference_timeout: int
     voter_secret: str
     public_origin: str
+    season_limit: int = 20
+    auto_continue: bool = True
+    intermission_seconds: int = 600
+    max_population: int = 32
+    max_adults: int = 24
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -77,6 +82,13 @@ class Settings:
                 "development-only-change-me",
             ),
             public_origin=os.environ.get("KRABVILLE_PUBLIC_ORIGIN", "https://krab.canadaverse.org"),
+            season_limit=max(1, int(os.environ.get("KRABVILLE_SEASON_LIMIT", "20"))),
+            auto_continue=_boolean("KRABVILLE_AUTO_CONTINUE", True),
+            intermission_seconds=max(
+                0, int(os.environ.get("KRABVILLE_INTERMISSION_SECONDS", "600"))
+            ),
+            max_population=max(12, int(os.environ.get("KRABVILLE_MAX_POPULATION", "32"))),
+            max_adults=max(8, int(os.environ.get("KRABVILLE_MAX_ADULTS", "24"))),
         )
 
     def ensure_directories(self) -> None:
