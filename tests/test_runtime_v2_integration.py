@@ -121,6 +121,15 @@ def _run_scenario(settings) -> dict[str, str]:
     assert stages == Counter({"adult": 8, "child": 2, "baby": 1, "teen": 1})
     assert _population_counts(connection) == (12, 8)
     assert connection.execute("SELECT COUNT(*) FROM childcare_arrangements").fetchone()[0] == 4
+    housing = connection.execute(
+        """
+        SELECT COALESCE(SUM(resident_capacity),0) capacity,
+          SUM(CASE WHEN status='available' THEN 1 ELSE 0 END) available_homes
+        FROM properties WHERE property_type IN ('house','apartment')
+        """
+    ).fetchone()
+    assert housing["capacity"] >= 32
+    assert housing["available_homes"] >= 4
 
     need_rows = list(connection.execute(
         "SELECT resident_id,need_key,satisfaction FROM resident_needs WHERE season_id=?",
