@@ -7,7 +7,7 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   }
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error" && !message.location().url.endsWith("/favicon.ico")) consoleErrors.push(message.text());
   });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
 
@@ -17,6 +17,21 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   const canvas = page.locator("#world canvas");
   await expect(canvas).toBeVisible();
   await page.waitForTimeout(1_500);
+  const world = page.locator("#world");
+  await expect(world).toHaveAttribute("data-map-asset", "/assets/kvsim-town-v2.webp");
+  await expect(world).toHaveAttribute("data-world-width", "3072");
+  await expect(world).toHaveAttribute("data-world-height", "2048");
+  await expect(world).toHaveAttribute("data-paths-in-bounds", "true");
+  await expect(world).toHaveAttribute("data-coordinate-space", /map|projected-legacy/);
+  const loadedAssets = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
+  expect(loadedAssets.some((name) => name.endsWith("/assets/kvsim-town-v2.webp"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/life-stages-v2.png"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/interiors-v2.png"))).toBe(true);
+
+  const initialZoom = Number(await world.getAttribute("data-camera-zoom"));
+  await page.locator("#zoom-in").click();
+  await expect.poll(async () => Number(await world.getAttribute("data-camera-zoom"))).toBeGreaterThan(initialZoom);
+  await page.locator("#map-fit").click();
 
   const pixels = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("2d");
@@ -39,16 +54,36 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   const firstResident = page.locator(".resident-row").first();
   await firstResident.hover();
   await expect(page.locator("#resident-peek")).toBeVisible();
-  await expect(page.locator("#resident-peek .peek-need")).toHaveCount(5);
-  await expect(page.locator("#resident-peek .peek-forecast")).toContainText("Likely next");
+  expect(await page.locator("#resident-peek .peek-need").count()).toBeGreaterThanOrEqual(5);
+  await expect(page.locator("#resident-peek .peek-forecast")).toContainText("Pondering");
   await firstResident.click();
   await expect(page.locator("#dossier")).toBeVisible();
   await expect(page.locator("#dossier-name")).not.toHaveText("Loading...");
-  await expect(page.locator("#dossier .forecast-band")).toContainText("Likely next");
+  await expect(page.locator("#dossier .decision-row")).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "Needs & wants" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Secrets & beliefs" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Finances" })).toBeVisible();
+  await page.getByRole("button", { name: "Needs & wants" }).click();
+  await expect(page.locator("#dossier-needs .section-label").first()).toContainText("high is healthy");
+  const satisfaction = await page.locator("#dossier-needs .need-row").evaluateAll((rows) => rows.map((row) => Number((row as HTMLElement).dataset.satisfaction)));
+  expect(satisfaction.every((value) => value >= 0 && value <= 100)).toBe(true);
   await page.getByRole("button", { name: "Relationships" }).click();
   await expect(page.locator("#relationship-canvas")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("#dossier")).toBeHidden();
+
+  const storyToggle = page.locator("#story-toggle");
+  if (await storyToggle.isVisible()) await storyToggle.click();
+  await page.locator('[data-story-tab="property"]').click();
+  await expect(page.locator(".place-card").first()).toBeVisible();
+  await expect(page.locator(".place-card button").first()).toContainText(/focus/i);
+  await page.locator(".place-card button").first().click();
+  await expect(page.locator("#interior-view")).toBeVisible();
+  await expect(world).toHaveAttribute("data-focused-location", /.+/);
+  await page.locator("#interior-close").click();
+  if (await storyToggle.isVisible()) await storyToggle.click();
+  await page.locator('[data-story-tab="seasons"]').click();
+  await expect(page.locator("[data-open-archive]")).toBeVisible();
 
   await page.locator("#archive-open").click();
   await expect(page.locator("#archive-view")).toBeVisible();

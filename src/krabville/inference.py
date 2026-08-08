@@ -408,7 +408,17 @@ def run_worker(settings: Settings | None = None, *, once: bool = False) -> int:
         while True:
             season = connection.execute("SELECT status,model_locked FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
             if season and season["status"] == "complete" and season["model_locked"]:
-                return 0
+                if once:
+                    return 0
+                number = int(
+                    connection.execute(
+                        "SELECT number FROM seasons ORDER BY number DESC LIMIT 1"
+                    ).fetchone()[0]
+                )
+                if not settings.auto_continue or number >= settings.season_limit:
+                    return 0
+                time.sleep(0.75)
+                continue
             worked = process_one(connection, settings, provider)
             if once:
                 return 0 if worked else 2

@@ -135,6 +135,34 @@ _MAJOR = {
         ("rainbow-tide", "Rainbow tide", "Sunlight and mist turn the harbour into shifting bands of colour.", "prism-flags"),
         ("cold-snap", "Sudden cold snap", "A sharp freeze tests pipes, gardens, and everyone’s spare mittens.", "heater-crates"),
     ),
+    "economy": (
+        ("rent-rise", "Rent increase", "Several households receive the same unwelcome rent notice.", "rent-notices"),
+        ("credit-union-error", "Credit union error", "A banking error leaves three balances wrong until someone finds the pattern.", "bank-ledger"),
+        ("new-contract", "Harbour contract", "A valuable repair contract could save one business and overwork another.", "signed-contract"),
+        ("market-shortage", "Market shortage", "A delayed ferry leaves the market short of essentials for one tense day.", "empty-crates"),
+        ("lottery-pool", "Lottery pool", "A shared ticket wins enough money to test every promise made about it.", "lottery-ticket"),
+        ("business-sale", "Business for sale", "A familiar shop goes up for sale and several residents quietly make plans.", "sale-sign"),
+        ("repair-bill", "Unexpected repair bill", "A major home repair forces one family to rethink its budget.", "repair-invoice"),
+        ("tourist-weekend", "Tourist weekend", "An unexpected crowd brings money, noise, and competing ideas about growth.", "visitor-map"),
+        ("investment-rumour", "Investment rumour", "A confident rumour about a local venture spreads faster than the facts.", "stock-board"),
+        ("pay-dispute", "Pay dispute", "Workers compare wages and discover a difference nobody can easily explain.", "pay-stubs"),
+        ("inheritance-letter", "Inheritance letter", "A resident receives an inheritance with a difficult condition attached.", "sealed-letter"),
+        ("community-fund", "Community fund", "The town must choose between childcare, repairs, and a public celebration.", "fund-box"),
+    ),
+    "relationship": (
+        ("old-flame", "An old flame returns", "A visitor from the past unsettles one comfortable relationship.", "visitor-suitcase"),
+        ("misheard-promise", "The misheard promise", "Two residents remember the same promise in completely different ways.", "torn-note"),
+        ("secret-date", "A secret date", "A private dinner is noticed by exactly the wrong neighbour.", "cafe-candle"),
+        ("public-apology", "Public apology", "A resident plans an apology, but the square is not the quiet place expected.", "apology-card"),
+        ("rumour-chain", "Rumour chain", "One uncertain detail becomes a townwide story before lunch.", "whisper-notes"),
+        ("shared-project", "Shared project", "A new collaboration creates surprising chemistry and immediate jealousy.", "project-board"),
+        ("forgotten-anniversary", "Forgotten anniversary", "A missed date puts one household's quiet tension on display.", "calendar-page"),
+        ("friendship-test", "Friendship test", "Two friends are asked to take opposite sides in a civic dispute.", "split-ribbon"),
+        ("unexpected-proposal", "Unexpected proposal", "A private proposal becomes public before an answer is given.", "ring-box"),
+        ("family-visit", "Family visit", "A long family visit changes routines and reopens an old disagreement.", "guest-bags"),
+        ("anonymous-gift", "Anonymous gift", "A thoughtful gift arrives without a name and invites several wrong guesses.", "gift-box"),
+        ("dance-partners", "Dance partners", "A community dance pairs residents in combinations nobody expected.", "dance-cards"),
+    ),
     "strange": (
         ("crab-cloud", "Crab-shaped cloud", "A perfect crab-shaped cloud drops one dry brass key.", "brass-key"),
         ("second-moon", "Moon in the water", "A second moon appears beneath the Lagoon surface.", "moon-reflection"),
@@ -182,7 +210,7 @@ MICRO_EVENTS = tuple(
     for index, subject in enumerate(_MICRO_SUBJECTS)
 )
 
-assert len(MAJOR_EVENTS) == 48
+assert len(MAJOR_EVENTS) >= 48
 assert len(MICRO_EVENTS) == 72
 
 

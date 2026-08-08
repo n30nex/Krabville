@@ -6,21 +6,55 @@ import json
 from pathlib import Path
 
 from krabville.content import MAJOR_EVENTS, MICRO_EVENTS, PATH_EDGES, PATH_NODES
-from krabville.db import initialize, loads, retrieve_memories
+from krabville.db import initialize, loads, now_iso, retrieve_memories
+from krabville.engine import Engine
 from krabville.legacy import import_week_one
 from krabville.reporter import generate_report
 from krabville.world import TARGET_TICKS, advance_tick, diagnose, start_season, stop_now
 
 
 def test_curated_content_counts() -> None:
-    assert len(MAJOR_EVENTS) == 48
+    assert len(MAJOR_EVENTS) == 72
     assert len(MICRO_EVENTS) == 72
     assert {event.category for event in MAJOR_EVENTS} == {
         "social",
         "civic",
         "environment",
+        "economy",
+        "relationship",
         "strange",
     }
+
+
+def test_campaign_continues_only_natural_seasons_and_stops_at_limit(settings_factory) -> None:
+    settings = settings_factory(intermission_seconds=0, season_limit=2)
+    engine = Engine(settings)
+    try:
+        first = start_season(engine.connection, seed_hex="10" * 32)
+        engine.connection.execute(
+            """
+            UPDATE seasons SET status='complete',model_locked=1,completion_reason='operator_stop',completed_at=?
+            WHERE id=?
+            """,
+            (now_iso(), first["seasonId"]),
+        )
+        assert engine._continue_if_due(engine.connection) is None
+        engine.connection.execute(
+            "UPDATE seasons SET completion_reason='natural' WHERE id=?",
+            (first["seasonId"],),
+        )
+        second = engine._continue_if_due(engine.connection)
+        assert second and second["number"] == 2
+        engine.connection.execute(
+            """
+            UPDATE seasons SET status='complete',model_locked=1,completion_reason='natural',completed_at=?
+            WHERE id=?
+            """,
+            (now_iso(), second["seasonId"]),
+        )
+        assert engine._continue_if_due(engine.connection) is None
+    finally:
+        engine.close()
 
 
 def test_seed_replay_is_deterministic(settings_factory) -> None:

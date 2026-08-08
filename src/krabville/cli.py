@@ -23,6 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     tick.add_argument("--count", type=int, default=1)
     run = sub.add_parser("run-fake-season")
     run.add_argument("--days", type=int, default=7)
+    run.add_argument("--seasons", type=int, default=1)
     sub.add_parser("diagnose")
     legacy = sub.add_parser("import-week-one")
     legacy.add_argument("--payload", type=Path, required=True)
@@ -46,28 +47,31 @@ def main() -> None:
             for _ in range(max(0, args.count)):
                 result = advance_tick(connection)
         elif args.command == "run-fake-season":
-            latest = connection.execute(
-                "SELECT status FROM seasons ORDER BY number DESC LIMIT 1"
-            ).fetchone()
-            if not latest or latest["status"] == "complete":
-                start_season(connection)
-            target = max(1, min(7, args.days)) * 288
             result = {}
-            while True:
-                season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
-                if not season or season["status"] == "complete" or int(season["current_tick"]) >= target:
+            for _ in range(max(1, min(52, args.seasons))):
+                latest = connection.execute(
+                    "SELECT status FROM seasons ORDER BY number DESC LIMIT 1"
+                ).fetchone()
+                if not latest or latest["status"] == "complete":
+                    start_season(connection)
+                target = max(1, min(7, args.days)) * 288
+                while True:
+                    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+                    if not season or season["status"] == "complete" or int(season["current_tick"]) >= target:
+                        break
+                    result = advance_tick(connection)
+                    if result.get("advanced") and int(result.get("tick", 0)) % 36 == 0:
+                        queue_conversation_if_needed(connection)
+                    while process_one(connection, settings, FakeProvider()):
+                        pass
+                season = connection.execute("SELECT id,status FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+                if season and season["status"] == "complete" and not connection.execute(
+                    "SELECT 1 FROM reports WHERE season_id=?", (season["id"],)
+                ).fetchone():
+                    generate_report(connection, int(season["id"]), settings)
+                    connection.commit()
+                if not season or season["status"] != "complete":
                     break
-                result = advance_tick(connection)
-                if result.get("advanced") and int(result.get("tick", 0)) % 36 == 0:
-                    queue_conversation_if_needed(connection)
-                while process_one(connection, settings, FakeProvider()):
-                    pass
-            season = connection.execute("SELECT id,status FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
-            if season and season["status"] == "complete" and not connection.execute(
-                "SELECT 1 FROM reports WHERE season_id=?", (season["id"],)
-            ).fetchone():
-                generate_report(connection, int(season["id"]), settings)
-                connection.commit()
             result = diagnose(connection)
         elif args.command == "diagnose":
             result = diagnose(connection)

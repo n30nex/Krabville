@@ -137,9 +137,12 @@ def resident_rows(connection: sqlite3.Connection, season_id: int) -> list[sqlite
             SELECT r.*, s.x, s.y, s.destination_x, s.destination_y, s.location,
                    s.activity, s.public_thought, s.intention, s.reflection,
                    s.mood, s.needs_json, s.path_json, s.action_until_tick,
-                   s.updated_tick
+                   s.updated_tick,v.life_stage,v.decision_state,v.current_decision_id,
+                   v.household_id,v.care_state
             FROM residents r
             JOIN resident_state s ON s.resident_id=r.id
+            LEFT JOIN resident_season_state v
+              ON v.resident_id=r.id AND v.season_id=s.season_id
             WHERE s.season_id=? ORDER BY r.id
             """,
             (season_id,),
@@ -152,7 +155,15 @@ def initialize_resident_state(
     season_id: int,
     prior_season_id: int | None = None,
 ) -> None:
-    residents = list(connection.execute("SELECT * FROM residents ORDER BY id"))
+    residents = list(
+        connection.execute(
+            """
+            SELECT r.* FROM residents r
+            JOIN resident_lifecycle l ON l.resident_id=r.id
+            WHERE l.alive=1 ORDER BY r.id
+            """
+        )
+    )
     for resident in residents:
         x, y = LOCATION_POINTS[resident["home"]]
         prior = None
@@ -203,8 +214,9 @@ def initialize_resident_state(
                 """
                 INSERT OR IGNORE INTO relationships(
                   season_id,resident_a,resident_b,affinity,trust,tension,familiarity,
-                  interactions,last_interaction_tick
-                ) VALUES(?,?,?,?,?,?,?,?,?)
+                  interactions,last_interaction_tick,attraction,affection,respect,
+                  commitment,resentment
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     season_id,
@@ -216,6 +228,11 @@ def initialize_resident_state(
                     int(prior_relationship["familiarity"]) if prior_relationship else 10,
                     int(prior_relationship["interactions"]) if prior_relationship else 0,
                     prior_relationship["last_interaction_tick"] if prior_relationship else None,
+                    int(prior_relationship["attraction"]) if prior_relationship else 0,
+                    int(prior_relationship["affection"]) if prior_relationship else 0,
+                    int(prior_relationship["respect"]) if prior_relationship else 0,
+                    int(prior_relationship["commitment"]) if prior_relationship else 0,
+                    int(prior_relationship["resentment"]) if prior_relationship else 0,
                 ),
             )
         if prior_season_id is not None:
