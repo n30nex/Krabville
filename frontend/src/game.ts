@@ -246,6 +246,7 @@ class LagoonScene extends Phaser.Scene {
 
   private bindCameraControls(): void {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event.target !== this.game.canvas) return;
       this.dragging = true;
       this.previousPointer = [pointer.x, pointer.y];
     });
@@ -253,7 +254,7 @@ class LagoonScene extends Phaser.Scene {
       this.dragging = false;
     });
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-      if (!this.dragging || !pointer.isDown) return;
+      if (!this.dragging || !pointer.isDown || pointer.event.target !== this.game.canvas) return;
       const [oldX, oldY] = this.previousPointer;
       const camera = this.cameras.main;
       camera.scrollX -= (pointer.x - oldX) / camera.zoom;
@@ -262,7 +263,8 @@ class LagoonScene extends Phaser.Scene {
     });
     this.input.on(
       "wheel",
-      (_pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
+      (pointer: Phaser.Input.Pointer, _objects: unknown[], _dx: number, dy: number) => {
+        if (pointer.event.target !== this.game.canvas) return;
         this.setZoom(this.cameras.main.zoom * (dy > 0 ? 0.9 : 1.1));
       },
     );
@@ -327,6 +329,7 @@ class LagoonScene extends Phaser.Scene {
     sprite.on("pointermove", showPeek);
     sprite.on("pointerout", () => this.onPeek(null));
     sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event.target !== this.game.canvas) return;
       pointer.event.stopPropagation();
       this.onPeek(null);
       this.selectResident(resident.slug);
@@ -463,6 +466,7 @@ class LagoonScene extends Phaser.Scene {
       marker.on("pointerover", () => label.setVisible(true));
       marker.on("pointerout", () => label.setVisible(false));
       marker.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event.target !== this.game.canvas) return;
         pointer.event.stopPropagation();
         this.focusLocation(building.name, point);
         this.onBuildingFocus(building.name);
