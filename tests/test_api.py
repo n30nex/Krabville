@@ -100,6 +100,16 @@ def test_untrusted_host_is_rejected(settings_factory) -> None:
         assert client.get("/healthz").status_code == 400
 
 
+def test_html_prevents_edge_script_injection(settings_factory) -> None:
+    settings = settings_factory()
+    settings.frontend_dir.mkdir(parents=True)
+    (settings.frontend_dir / "index.html").write_text("<!doctype html><title>Krabville</title>", encoding="utf-8")
+    with TestClient(create_app(settings), base_url="http://testserver") as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store, no-transform"
+
+
 def test_empty_town_state_has_a_complete_public_schema(settings_factory) -> None:
     settings = settings_factory()
     with TestClient(create_app(settings), base_url="http://testserver") as client:
