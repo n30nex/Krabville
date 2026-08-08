@@ -12,6 +12,12 @@ from collections import defaultdict
 from typing import Any
 
 from .config import Settings
+from .commerce_v2 import (
+    claim_due_commitment,
+    run_daily_commerce,
+    run_phone_window,
+    seed_commerce,
+)
 from .content import (
     LOCATION_ACCESS,
     LOCATION_POINTS,
@@ -268,6 +274,7 @@ def start_season(
         season_id = int(cursor.lastrowid)
         initialize_resident_state(connection, season_id, prior_season_id)
         initialize_v2_season_state(connection, season_id, prior_season_id, seed_hex)
+        seed_commerce(connection)
         season = connection.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
         event = _day_event(connection, season, 0, opening_slug)
         for resident in connection.execute(
@@ -524,12 +531,22 @@ def _v2_action_plan(row: sqlite3.Row, action: str, hour: float) -> tuple[str, st
     stage = str(row["life_stage"] or "adult")
     home = str(row["home"])
     workplace = str(row["workplace"])
+    # The decision engine uses one tick to ponder and one to commit at wake-up.
+    sleep_ticks = max(1, round(((5.75 - hour) if hour < 5.75 else (29.75 - hour)) * 12) - 2)
     if stage == "baby":
-        if action == "restore_energy" or hour >= 20 or hour < 6:
-            return "sleeping in the nursery", home, 24
+        if action == "restore_energy" or hour >= 20 or hour < 5.75:
+            return "sleeping in the nursery", home, sleep_ticks if hour >= 20 or hour < 5.75 else 24
         if action == "eat_meal":
             return "having a bottle with a caregiver", home, 8
         return "playing safely with a caregiver", home, 12
+    if hour >= 22 or hour < 5.75:
+        return "sleeping safely at home", home, sleep_ticks
+    if hour < 6.5:
+        return (
+            "getting breakfast before the day begins",
+            "Hobbs Cafe" if int(row["id"]) % 2 else home,
+            12,
+        )
     if stage in {"child", "teen"} and 8 <= hour < 15:
         return "learning at school", "Oak Hill College", 18
     plans = {
@@ -581,6 +598,102 @@ def _sync_needs(
     )
 
 
+def _care_links(
+    connection: sqlite3.Connection,
+    season_id: int,
+    hour: float,
+) -> tuple[dict[int, list[dict[str, Any]]], dict[int, dict[str, Any]]]:
+    by_caregiver: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    by_child: dict[int, dict[str, Any]] = {}
+    for child in connection.execute(
+        """
+        SELECT r.id,r.name,r.home,l.current_stage,v.household_id,c.id arrangement_id,
+          c.caregiver_resident_id,c.provider_business_id
+        FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+        JOIN resident_season_state v ON v.resident_id=r.id AND v.season_id=?
+        LEFT JOIN childcare_arrangements c ON c.child_resident_id=r.id AND c.status='active'
+        WHERE l.current_stage IN ('baby','child') ORDER BY r.id,c.id
+        """,
+        (season_id,),
+    ):
+        stage = str(child["current_stage"])
+        if stage == "child" and child["provider_business_id"] and 8 <= hour < 15:
+            connection.execute(
+                "UPDATE resident_season_state SET care_state='institutional' WHERE season_id=? AND resident_id=?",
+                (season_id, child["id"]),
+            )
+            continue
+        caregiver = None
+        if child["caregiver_resident_id"]:
+            caregiver = connection.execute(
+                """
+                SELECT r.id,r.name FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+                WHERE r.id=? AND l.alive=1 AND l.current_stage IN ('adult','senior')
+                """,
+                (child["caregiver_resident_id"],),
+            ).fetchone()
+        if not caregiver:
+            caregiver = connection.execute(
+                """
+                SELECT r.id,r.name FROM household_members hm JOIN residents r ON r.id=hm.resident_id
+                JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+                LEFT JOIN employment e ON e.resident_id=r.id AND e.status IN ('active','leave')
+                WHERE hm.household_id=? AND hm.ended_season_id IS NULL
+                  AND l.current_stage IN ('adult','senior')
+                ORDER BY CASE e.status WHEN 'leave' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,r.id LIMIT 1
+                """,
+                (child["household_id"],),
+            ).fetchone()
+        if not caregiver:
+            connection.execute(
+                "UPDATE resident_season_state SET care_state='uncovered' WHERE season_id=? AND resident_id=?",
+                (season_id, child["id"]),
+            )
+            continue
+        if stage == "baby":
+            connection.execute(
+                "UPDATE employment SET status='leave' WHERE resident_id=? AND status='active'",
+                (caregiver["id"],),
+            )
+        link = {
+            "childId": int(child["id"]), "childName": str(child["name"]),
+            "stage": stage, "home": str(child["home"]),
+            "caregiverId": int(caregiver["id"]), "caregiverName": str(caregiver["name"]),
+        }
+        by_child[int(child["id"])] = link
+        by_caregiver[int(caregiver["id"])].append(link)
+        connection.execute(
+            "UPDATE resident_season_state SET care_state='covered' WHERE season_id=? AND resident_id=?",
+            (season_id, child["id"]),
+        )
+    return by_caregiver, by_child
+
+
+def _care_activity(link: dict[str, Any], needs: dict[str, float], *, caregiver: bool) -> str:
+    name = str(link["childName"])
+    if needs.get("hunger", 100) < 65:
+        return f"feeding {name} a bottle" if caregiver else f"having a bottle with {link['caregiverName']}"
+    if needs.get("hygiene", 100) < 55:
+        return f"changing and washing {name}" if caregiver else f"being changed and washed by {link['caregiverName']}"
+    return f"caring for {name} at home" if caregiver else f"playing safely with {link['caregiverName']}"
+
+
+def _place_inside(
+    connection: sqlite3.Connection,
+    season_id: int,
+    resident_id: int,
+    location: str,
+) -> None:
+    x, y = LOCATION_POINTS.get(location, LOCATION_POINTS["Town Square"])
+    connection.execute(
+        """
+        UPDATE resident_state SET x=?,y=?,destination_x=?,destination_y=?,location=?,path_json='[]'
+        WHERE season_id=? AND resident_id=?
+        """,
+        (x, y, x, y, location, season_id, resident_id),
+    )
+
+
 def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick: int) -> None:
     day_tick = tick % TICKS_PER_DAY
     hour = day_tick * 5 / 60
@@ -589,6 +702,8 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
         (season["id"], tick // TICKS_PER_DAY),
     ).fetchone()
     rows = resident_rows(connection, season["id"])
+    rows_by_id = {int(row["id"]): row for row in rows}
+    care_by_caregiver, care_by_child = _care_links(connection, int(season["id"]), hour)
     location_counts: dict[str, int] = defaultdict(int)
     for resident in rows:
         location_counts[str(resident["location"])] += 1
@@ -609,8 +724,118 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
         needs = needs_result["needs"]
         mood = derive_mood({"needs": needs, "eventStress": 12 if event else 0})
         _sync_needs(connection, int(season["id"]), int(row["id"]), tick, before, needs)
+        care_children = care_by_caregiver.get(int(row["id"]), [])
+        receiving_care = care_by_child.get(int(row["id"]))
+        if care_children and 5.75 <= hour < 22:
+            link = min(
+                care_children,
+                key=lambda item: min(normalize_needs(loads(rows_by_id[item["childId"]]["needs_json"], {})).values()),
+            )
+            child_needs = normalize_needs(loads(rows_by_id[link["childId"]]["needs_json"], {}))
+            activity = _care_activity(link, child_needs, caregiver=True)
+            _place_inside(connection, int(season["id"]), int(row["id"]), str(link["home"]))
+            if row["current_decision_id"]:
+                connection.execute(
+                    "UPDATE decision_history SET phase='interrupted',resolved_tick=?,interruption_reason='dependent care' WHERE id=? AND phase IN ('pondering','committed')",
+                    (tick, row["current_decision_id"]),
+                )
+            connection.execute(
+                """
+                UPDATE resident_state SET activity=?,public_thought=?,intention=?,mood=?,needs_json=?,
+                  action_until_tick=?,updated_tick=? WHERE season_id=? AND resident_id=?
+                """,
+                (activity, f"{link['childName']} needs me close by.", activity.capitalize(), mood["label"], dumps(needs), tick + 6, tick, season["id"], row["id"]),
+            )
+            connection.execute(
+                """
+                UPDATE resident_season_state SET decision_state='committed',current_decision_id=NULL,
+                  mood_label=?,mood_valence=?,stress=?,health_score=?,updated_tick=?
+                WHERE season_id=? AND resident_id=?
+                """,
+                (mood["label"], int(round(mood["valence"])), int(round(mood["stress"])), int(round(needs["health"])), tick, season["id"], row["id"]),
+            )
+            continue
+        if receiving_care and 5.75 <= hour < 22:
+            activity = _care_activity(receiving_care, needs, caregiver=False)
+            if needs.get("hunger", 100) < 65:
+                needs["hunger"] = min(100, needs["hunger"] + 3.5)
+            if needs.get("hygiene", 100) < 55:
+                needs["hygiene"] = min(100, needs["hygiene"] + 3.0)
+            _sync_needs(connection, int(season["id"]), int(row["id"]), tick, before, needs)
+            _place_inside(connection, int(season["id"]), int(row["id"]), str(receiving_care["home"]))
+            connection.execute(
+                """
+                UPDATE resident_state SET activity=?,public_thought=?,intention=?,mood=?,needs_json=?,
+                  action_until_tick=?,updated_tick=? WHERE season_id=? AND resident_id=?
+                """,
+                (activity, f"{receiving_care['caregiverName']} is looking after me.", activity.capitalize(), mood["label"], dumps(needs), tick + 6, tick, season["id"], row["id"]),
+            )
+            connection.execute(
+                """
+                UPDATE resident_season_state SET decision_state='committed',current_decision_id=NULL,
+                  mood_label=?,mood_valence=?,stress=?,health_score=?,updated_tick=?
+                WHERE season_id=? AND resident_id=?
+                """,
+                (mood["label"], int(round(mood["valence"])), int(round(mood["stress"])), int(round(needs["health"])), tick, season["id"], row["id"]),
+            )
+            continue
         changed = tick >= int(row["action_until_tick"])
         if changed:
+            commitment = claim_due_commitment(
+                connection, int(season["id"]), int(row["id"]), tick
+            )
+            if commitment:
+                current_decision = int(row["current_decision_id"] or 0)
+                if current_decision:
+                    connection.execute(
+                        """
+                        UPDATE decision_history SET phase='interrupted',resolved_tick=?,
+                          interruption_reason='phone commitment' WHERE id=?
+                        """,
+                        (tick, current_decision),
+                    )
+                activity = f"keeping a {commitment['type']} commitment"
+                location = str(commitment["location"])
+                _set_destination(
+                    connection, int(season["id"]), int(row["id"]),
+                    float(row["x"]), float(row["y"]), location,
+                )
+                connection.execute(
+                    """
+                    UPDATE resident_state SET activity=?,public_thought=?,intention=?,mood=?,
+                      needs_json=?,action_until_tick=?,updated_tick=?
+                    WHERE season_id=? AND resident_id=?
+                    """,
+                    (
+                        activity, str(commitment["summary"]), activity.capitalize(), mood["label"],
+                        dumps(needs), tick + 18, tick, season["id"], row["id"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE resident_season_state SET decision_state='committed',current_decision_id=NULL,
+                      mood_label=?,mood_valence=?,stress=?,health_score=?,updated_tick=?
+                    WHERE season_id=? AND resident_id=?
+                    """,
+                    (
+                        mood["label"], int(round(mood["valence"])), int(round(mood["stress"])),
+                        int(round(needs["health"])), tick, season["id"], row["id"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO activities(season_id,tick,resident_id,kind,summary,location,source,created_at)
+                    VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        season["id"], tick, row["id"], f"phone_{commitment['type']}", activity,
+                        location, "phone-network", now_iso(),
+                    ),
+                )
+                emit(connection, season["id"], tick, "communication", {
+                    "resident": row["slug"], "activity": activity, "location": location,
+                })
+                continue
             current_decision = int(row["current_decision_id"] or 0)
             if row["decision_state"] == "pondering" and current_decision:
                 decision = connection.execute(
@@ -1322,7 +1547,12 @@ def advance_tick(connection: sqlite3.Connection) -> dict[str, Any]:
         _schedule_daily_jobs(connection, season, day, tick)
         if day_tick == 48:
             economy = settle_daily_economy(connection, int(season["id"]), day, tick)
+            economy.update(run_daily_commerce(connection, int(season["id"]), day, tick))
             emit(connection, int(season["id"]), tick, "economy", economy)
+        if day_tick in {108, 180, 240}:
+            phone = run_phone_window(connection, season, tick)
+            if phone["calls"]:
+                emit(connection, int(season["id"]), tick, "communication", phone)
         if day_tick == POLL_OPEN_TICK:
             _create_poll(connection, season, day)
         if day_tick == POLL_CLOSE_TICK:

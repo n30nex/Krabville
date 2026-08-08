@@ -52,15 +52,53 @@ export interface HouseholdSummary {
 
 export interface PropertySummary {
   id?: string | number;
+  slug?: string;
   name: string;
   type?: string;
+  address?: string;
+  mapLocation?: string;
   owner?: string;
-  occupants?: string[];
+  occupants?: Array<{ slug: string; name: string; lifeStage?: string }>;
+  inside?: Array<{ slug: string; name: string; activity: string }>;
   value?: number;
   status?: string;
+  condition?: number;
   x?: number;
   y?: number;
   interiorAvailable?: boolean;
+  interiorVariant?: number;
+  business?: { id?: number; slug?: string; name?: string; status?: string } | null;
+}
+
+export interface InventoryItem {
+  name: string;
+  category: string;
+  quantity: number;
+  condition?: number;
+  price?: number;
+  lowStock?: boolean;
+  assetKey?: string;
+}
+
+export interface AccountSummary {
+  ownerKind: "resident" | "household" | "business";
+  owner: string;
+  residentSlug?: string | null;
+  name: string;
+  type: string;
+  status: string;
+  balance: number;
+}
+
+export interface CommunicationSummary {
+  tick: number;
+  direction: "incoming" | "outgoing";
+  otherSlug: string;
+  otherName: string;
+  purpose: string;
+  summary: string;
+  visibility: "public" | "private";
+  durationMinutes: number;
 }
 
 export interface Resident {
@@ -97,6 +135,8 @@ export interface Resident {
   pondering?: { active?: boolean; thought: string; urgentNeeds?: string[]; untilTick?: number };
   urgentNeeds?: string[];
   spriteVariant?: number;
+  indoors?: boolean;
+  building?: string | null;
   family?: FamilyLink[];
   secrets?: PublicNote[];
   beliefs?: PublicNote[];
@@ -122,9 +162,16 @@ export interface Resident {
     investments?: number;
     debt?: number;
     netWorth?: number;
+    accounts?: Array<{ name: string; type: string; status: string; balance: number }>;
+    history?: Array<{ season: number; day: number; cash: number; debt: number; investments: number; netWorth: number }>;
   };
+  phone?: { number: string; device: string; active: boolean } | null;
+  communications?: CommunicationSummary[];
   properties?: PropertySummary[];
   inventory?: string[];
+  onPersonInventory?: InventoryItem[];
+  homeInventory?: InventoryItem[];
+  transactions?: Array<{ id: number; tick: number; category: string; description: string; amount: number }>;
   lifeLedger?: LedgerEntry[];
   updatedTick: number;
 }
@@ -236,11 +283,33 @@ export interface KrabvilleState {
     medianNetWorth?: number;
     employed?: number;
     unemployed?: number;
-    businesses?: Array<{ name: string; owner?: string; employees?: number; cash?: number; status?: string }>;
+    businesses?: Array<{
+      id?: number; slug?: string; name: string; industry?: string; owner?: string; employees?: number;
+      cash?: number; status?: string; propertySlug?: string; location?: string; inventoryUnits?: number;
+      lowStockItems?: number; sales?: number;
+    }>;
+    accounts?: AccountSummary[];
+    transactions?: Array<{ id: number; tick: number; category: string; description: string; amount: number }>;
+    history?: Array<{ season: number; day: number; cash: number; debt: number; investments: number; netWorth: number }>;
+    catalogItems?: number;
+    stockUnits?: number;
+    barters?: number;
+    phoneCalls?: number;
   };
   families?: Array<{ id?: string | number; name: string; members: FamilyLink[]; summary?: string }>;
   properties?: PropertySummary[];
   buildings?: PropertySummary[];
+  communications?: Array<{
+    tick: number;
+    caller: string;
+    callerName: string;
+    recipient: string;
+    recipientName: string;
+    purpose: string;
+    visibility: "public" | "private";
+    durationMinutes: number;
+    summary: string;
+  }>;
   townEvents?: LedgerEntry[];
   seasonSummaries?: Array<{ id: number; number: number; status: string; headline?: string; progressPercent?: number }>;
   updatedAt: string;
@@ -264,4 +333,22 @@ export interface ResidentDetail extends Resident {
     resentment?: number;
     kinship?: string;
   }>;
+}
+
+export interface PropertyDetail {
+  id: number;
+  slug: string;
+  name: string;
+  type: string;
+  address: string;
+  mapLocation: string;
+  status: string;
+  condition: number;
+  value: number;
+  interiorVariant: number;
+  residents: Array<{ slug: string; name: string; activity: string; mood: string }>;
+  households: Array<{ id: number; name: string }>;
+  business: null | Record<string, unknown>;
+  inventory: InventoryItem[];
+  transactions: Array<{ id: number; tick: number; category: string; description: string; amount: number }>;
 }

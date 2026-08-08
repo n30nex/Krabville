@@ -72,8 +72,8 @@ _ACTIVITY_EFFECTS = {
 
 _ACTIVITY_ALIASES = {
     "sleep": ("sleep", "nap", "rest in bed"),
-    "eat": ("eat", "meal", "breakfast", "lunch", "dinner", "supper"),
-    "wash": ("wash", "shower", "bath", "hygiene"),
+    "eat": ("eat", "meal", "breakfast", "lunch", "dinner", "supper", "bottle", "feeding", "snack"),
+    "wash": ("wash", "shower", "bath", "hygiene", "changing", "diaper"),
     "healthcare": ("doctor", "clinic", "hospital", "healthcare", "recovering"),
     "relax": ("relax", "reading", "coffee", "quiet at home"),
     "shelter": ("shelter", "seeking safety", "staying inside"),
@@ -510,4 +510,3 @@ def family_intent(state: dict[str, Any]) -> dict[str, Any]:
         "allowsFamilyGrowth": intent == "consider_family_growth",
         "population": capacity,
     }
-

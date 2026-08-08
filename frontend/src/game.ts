@@ -32,6 +32,7 @@ const LOCATIONS: Record<string, Point> = {
   "Hobbs Cafe": [454, 451],
   "Lagoon Library": [536, 653],
   "Lagoon Clinic": [1105, 470],
+  "Harbour Shelter": [1165, 510],
   "Radio Shack": [150, 386],
   "Harbour Office": [850, 795],
   Boatworks: [1455, 786],
@@ -211,6 +212,8 @@ class LagoonScene extends Phaser.Scene {
       worldElement.dataset.worldHeight = String(WORLD_HEIGHT);
     }
     this.add.image(0, 0, "lagoon-map").setOrigin(0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
+    this.textures.get("lagoon-map").setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.cameras.main.setRoundPixels(true);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.propLayer = this.add.container(0, 0).setDepth(70);
     this.buildingLayer = this.add.container(0, 0).setDepth(45);
@@ -403,8 +406,15 @@ class LagoonScene extends Phaser.Scene {
       const urgent = urgentNeedKeys(resident);
       view.needSignal.setText(urgent.map((key) => NEED_BADGES[key] ?? key.slice(0, 4).toUpperCase()).join(" + "));
       view.needSignal.setVisible(urgent.length > 0);
+      view.container.setVisible(!resident.indoors);
       if (resident.pondering?.active || changedDecision) {
         this.showThought(view, resident.pondering?.thought || resident.publicThought || resident.intention);
+      }
+      if (resident.indoors) {
+        view.sprite.stop();
+        view.container.setPosition(...projectPoint([resident.x, resident.y], state));
+        view.updatedTick = resident.updatedTick;
+        return;
       }
       if (view.updatedTick === resident.updatedTick) return;
       view.updatedTick = resident.updatedTick;
@@ -450,13 +460,14 @@ class LagoonScene extends Phaser.Scene {
     const buildings: PropertySummary[] = state.buildings?.length
       ? state.buildings.filter((building) => building.interiorAvailable || building.x !== undefined)
       : ["Hobbs Cafe", "Lagoon Library", "Lagoon Clinic", "Radio Shack", "Harbour Office"].map((name) => ({ name, interiorAvailable: true }));
-    for (const building of buildings.slice(0, 18)) {
+    for (const building of buildings.slice(0, 36)) {
       const point = building.x !== undefined && building.y !== undefined
         ? projectPoint([building.x, building.y], state)
         : this.locationPoint(building.name, state);
       if (!point) continue;
       const marker = this.add.circle(0, 0, 7, 0x63d8e3, 0.8).setStrokeStyle(2, 0xe8fbff, 0.9).setInteractive({ useHandCursor: true });
-      const label = this.add.text(0, -13, building.interiorAvailable ? `${building.name}  |  VIEW INSIDE` : building.name, {
+      const inside = building.inside ?? [];
+      const label = this.add.text(0, -13, building.interiorAvailable ? `${building.name}  |  ${inside.length} INSIDE` : building.name, {
         fontFamily: "Inter, Segoe UI, sans-serif",
         fontSize: "10px",
         color: "#eafcff",
@@ -471,12 +482,23 @@ class LagoonScene extends Phaser.Scene {
         this.focusLocation(building.name, point);
         this.onBuildingFocus(building.name);
       });
-      this.buildingLayer.add(this.add.container(point[0], point[1] - 14, [marker, label]));
+      const occupants: Phaser.GameObjects.GameObject[] = [];
+      inside.slice(0, 5).forEach((occupant, index) => {
+        const resident = state.residents.find((item) => item.slug === occupant.slug);
+        const x = (index - (Math.min(inside.length, 5) - 1) / 2) * 18;
+        const badge = this.add.circle(x, -24, 9, resident ? Phaser.Display.Color.HexStringToColor(resident.color).color : 0x63d8e3, 0.96);
+        badge.setStrokeStyle(2, 0xf4fdff, 0.9);
+        const initial = this.add.text(x, -24, occupant.name.slice(0, 1), {
+          fontFamily: "Inter, Segoe UI, sans-serif", fontSize: "9px", fontStyle: "bold", color: "#071116",
+        }).setOrigin(0.5);
+        occupants.push(badge, initial);
+      });
+      this.buildingLayer.add(this.add.container(point[0], point[1] - 14, [marker, label, ...occupants]));
     }
   }
 
   private locationPoint(location: string, state = this.state): Point | undefined {
-    const building = state?.buildings?.find((item) => item.name === location);
+    const building = state?.buildings?.find((item) => item.name === location || item.mapLocation === location);
     if (state && building?.x !== undefined && building.y !== undefined) return projectPoint([building.x, building.y], state);
     const legacy = LOCATIONS[location];
     return legacy ? projectLegacyPoint(legacy) : undefined;
@@ -589,7 +611,7 @@ class LagoonScene extends Phaser.Scene {
   }
 
   setZoom(value: number): void {
-    this.cameras.main.setZoom(Phaser.Math.Clamp(value, this.minimumZoom(), 1.8));
+    this.cameras.main.setZoom(Phaser.Math.Clamp(value, this.minimumZoom(), 2.5));
     const element = document.getElementById("world");
     if (element) element.dataset.cameraZoom = this.cameras.main.zoom.toFixed(4);
     this.updateObjectScale();

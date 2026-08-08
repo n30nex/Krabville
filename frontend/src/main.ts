@@ -3,15 +3,21 @@ import {
   Archive,
   BookOpen,
   Brain,
+  Building2,
   ChevronRight,
   CloudSun,
   createIcons,
+  House,
+  Landmark,
   LocateFixed,
   Map as MapIcon,
   MessageCircle,
   PackageOpen,
   PanelRightOpen,
+  Phone,
   Radio,
+  ShoppingBasket,
+  Store,
   Users,
   Vote as VoteIcon,
   X,
@@ -19,8 +25,8 @@ import {
   ZoomOut,
 } from "lucide";
 
-import { connectEvents, fetchResident, fetchSeason, fetchSeasons, fetchState, vote } from "./api";
-import type { KrabvilleState, LedgerEntry, Point, PublicNote, Resident, ResidentDetail } from "./types";
+import { connectEvents, fetchProperty, fetchResident, fetchSeason, fetchSeasons, fetchState, vote } from "./api";
+import type { InventoryItem, KrabvilleState, LedgerEntry, Point, PropertyDetail, PublicNote, Resident, ResidentDetail } from "./types";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -39,6 +45,15 @@ app.innerHTML = `
         <button class="command-button" id="archive-open"><i data-lucide="archive"></i><span>Seasons</span></button>
       </div>
     </header>
+    <nav class="command-dock" aria-label="Explore Krabville">
+      <button data-explore="residents"><i data-lucide="users"></i><span>Residents</span></button>
+      <button data-explore="homes"><i data-lucide="house"></i><span>Homes</span></button>
+      <button data-explore="buildings"><i data-lucide="building-2"></i><span>Buildings</span></button>
+      <button data-explore="shops"><i data-lucide="store"></i><span>Shops</span></button>
+      <button data-explore="bank"><i data-lucide="landmark"></i><span>Bank</span></button>
+      <button data-explore="calls"><i data-lucide="phone"></i><span>Calls</span></button>
+      <button data-explore="story"><i data-lucide="book-open"></i><span>Story</span></button>
+    </nav>
     <main class="workspace">
       <aside class="resident-rail" id="resident-rail" aria-label="Krabville residents">
         <div class="rail-heading"><span>Residents</span><b id="resident-count">0</b></div>
@@ -57,6 +72,8 @@ app.innerHTML = `
         <aside class="interior-view" id="interior-view" hidden aria-label="Building interior">
           <div class="interior-head"><div><span>Inside</span><b id="interior-name">Building</b></div><button class="icon-button" id="interior-close" aria-label="Close interior"><i data-lucide="x"></i></button></div>
           <div class="interior-art" id="interior-art" role="img"></div>
+          <div class="interior-occupants" id="interior-occupants"></div>
+          <button class="interior-open" id="interior-open">Open building details</button>
         </aside>
         <div class="live-ticker"><span class="ticker-signal"></span><b>LIVE</b><p id="live-ticker">Connecting to the town ledger...</p></div>
       </section>
@@ -79,6 +96,10 @@ app.innerHTML = `
     <div class="drawer-head"><div><span>Resident dossier</span><h2 id="dossier-name">Resident</h2></div><button class="icon-button" id="dossier-close" aria-label="Close dossier"><i data-lucide="x"></i></button></div>
     <div class="drawer-body" id="dossier-body"></div>
   </section>
+  <section class="explore-view" id="explore-view" hidden aria-label="Explore Krabville">
+    <div class="explore-head"><div><span>Town directory</span><h2 id="explore-title">Explore</h2></div><button class="icon-button" id="explore-close" aria-label="Close explorer"><i data-lucide="x"></i></button></div>
+    <div class="explore-content" id="explore-content"></div>
+  </section>
   <section class="archive-view" id="archive-view" hidden aria-label="Season archive">
     <div class="archive-head"><div><span>Permanent chronicle</span><h2>Season archive</h2></div><button class="icon-button" id="archive-close" aria-label="Close archive"><i data-lucide="x"></i></button></div>
     <div class="archive-layout"><nav id="archive-list"></nav><article id="archive-detail"></article></div>
@@ -92,14 +113,20 @@ createIcons({
     Archive,
     BookOpen,
     Brain,
+    Building2,
     ChevronRight,
     CloudSun,
+    House,
+    Landmark,
     LocateFixed,
     Map: MapIcon,
     MessageCircle,
     PackageOpen,
     PanelRightOpen,
+    Phone,
     Radio,
+    ShoppingBasket,
+    Store,
     Users,
     Vote: VoteIcon,
     X,
@@ -362,15 +389,25 @@ function interiorFrame(location: string): number {
   return /house|home/.test(name) ? 0 : 9;
 }
 
+let currentInteriorSlug = "";
+
 function showInterior(location: string): void {
-  const frame = interiorFrame(location);
+  const property = state?.properties?.find((item) => item.name === location || item.mapLocation === location);
+  const frame = property?.interiorVariant !== undefined ? ((property.interiorVariant % 12) + 12) % 12 : interiorFrame(location);
   const column = frame % 4;
   const row = Math.floor(frame / 4);
   const art = byId<HTMLElement>("interior-art");
   art.style.setProperty("--interior-x", `${column * 100 / 3}%`);
   art.style.setProperty("--interior-y", `${row * 50}%`);
-  art.setAttribute("aria-label", `${location} interior cutaway`);
-  byId("interior-name").textContent = location;
+  const name = property?.name ?? location;
+  art.setAttribute("aria-label", `${name} interior cutaway`);
+  byId("interior-name").textContent = name;
+  currentInteriorSlug = property?.slug ?? "";
+  const occupants = property?.inside ?? [];
+  byId("interior-occupants").innerHTML = occupants.length
+    ? occupants.map((resident) => `<button data-resident="${h(resident.slug)}"><b>${h(resident.name)}</b><span>${h(resident.activity)}</span></button>`).join("")
+    : `<span>Nobody is inside right now.</span>`;
+  byId<HTMLButtonElement>("interior-open").disabled = !currentInteriorSlug;
   byId<HTMLElement>("interior-view").hidden = false;
 }
 
@@ -484,8 +521,8 @@ function renderFamilies(value: KrabvilleState): string {
 }
 
 function renderProperty(value: KrabvilleState): string {
-  const properties: NonNullable<KrabvilleState["properties"]> = value.properties?.length ? value.properties : value.buildings?.length ? value.buildings : derivedHouseholds(value).map((household) => ({ name: household.home, type: "Home", occupants: household.memberNames, interiorAvailable: true }));
-  return `<div class="town-heading"><span>Property and places</span><b>${properties.length}</b><p>Select a building to bring its entrance and interior affordance into focus.</p></div><div class="town-card-list">${properties.map((property) => `<article class="place-card"><span>${h(property.type ?? "Place")}${property.interiorAvailable ? " | Interior" : ""}</span><h4>${h(property.name)}</h4><p>${h(property.occupants?.join(", ") || property.owner || property.status || "Town location")}</p>${property.value !== undefined ? `<b>${formatCad(property.value)}</b>` : ""}<button data-place="${h(property.name)}">Focus building</button></article>`).join("")}</div>`;
+  const properties: NonNullable<KrabvilleState["properties"]> = value.properties?.length ? value.properties : value.buildings?.length ? value.buildings : derivedHouseholds(value).map((household) => ({ name: household.home, type: "Home", interiorAvailable: true }));
+  return `<div class="town-heading"><span>Property and places</span><b>${properties.length}</b><p>Select a building to open its occupancy and interior.</p></div><div class="town-card-list">${properties.map((property) => `<article class="place-card"><span>${h(property.type ?? "Place")}${property.interiorAvailable ? " | Interior" : ""}</span><h4>${h(property.name)}</h4><p>${h(property.occupants?.map((resident) => resident.name).join(", ") || property.owner || property.status || "Town location")}</p>${property.value !== undefined ? `<b>${formatCad(property.value)}</b>` : ""}<button data-place="${h(property.name)}">Focus building</button></article>`).join("")}</div>`;
 }
 
 function renderEvents(value: KrabvilleState): string {
@@ -519,6 +556,121 @@ function renderStory(value: KrabvilleState): void {
   storyMarkupTab = storyTab;
   storyMarkup = nextMarkup;
   content.innerHTML = nextMarkup;
+}
+
+function occupantNames(property: NonNullable<KrabvilleState["properties"]>[number]): string {
+  return property.inside?.map((resident) => resident.name).join(", ")
+    || property.occupants?.map((resident) => resident.name).join(", ")
+    || "Nobody is inside right now";
+}
+
+function miniNeedBars(resident: Resident): string {
+  return displayedNeeds(resident)
+    .sort((left, right) => left[1] - right[1])
+    .slice(0, 3)
+    .map(([label, value]) => `<div class="directory-meter"><span>${h(label)}</span><i><b class="${needTone(value)}" style="width:${value}%"></b></i><em>${Math.round(value)}</em></div>`)
+    .join("");
+}
+
+function sparkline(values: number[]): string {
+  if (!values.length) return `<div class="empty-chart">History begins after the next 04:00 settlement.</div>`;
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const points = values.map((value, index) => {
+    const x = values.length === 1 ? 50 : (index * 100) / (values.length - 1);
+    const y = high === low ? 50 : 92 - ((value - low) * 84) / (high - low);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  return `<svg class="money-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Financial history"><polyline points="${points}"></polyline></svg>`;
+}
+
+function inventoryGrid(items: InventoryItem[]): string {
+  if (!items.length) return `<div class="empty-state">No goods recorded here.</div>`;
+  return `<div class="inventory-grid">${items.map((item) => `<article><span class="item-icon" data-item="${h(item.assetKey ?? "item")}">${h(item.name.slice(0, 2).toUpperCase())}</span><div><b>${h(item.name)}</b><small>${h(item.category)}</small></div><em>${item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}${item.price !== undefined ? ` | ${formatCad(item.price)}` : ""}</em></article>`).join("")}</div>`;
+}
+
+function directoryProperties(kind: "homes" | "buildings"): string {
+  if (!state) return "";
+  const homes = new Set(["house", "apartment"]);
+  const properties = (state.properties ?? []).filter((property) => kind === "homes" ? homes.has(property.type ?? "") : !homes.has(property.type ?? ""));
+  return `<div class="directory-grid property-directory">${properties.map((property) => `
+    <button class="directory-card property-directory-card" data-property="${h(property.slug ?? "")}" data-place="${h(property.name)}">
+      <span class="card-state ${h(property.status ?? "active")}">${h(property.type ?? "place")} | ${h(property.status ?? "active")}</span>
+      <h3>${h(property.name)}</h3><p>${h(property.address ?? property.mapLocation ?? "Krabville")}</p>
+      <div class="occupancy-line"><b>${property.inside?.length ?? 0} inside</b><span>${h(occupantNames(property))}</span></div>
+      <footer><span>${formatCad(property.value)}</span><em>${property.condition ?? 100}% condition</em></footer>
+    </button>`).join("") || `<div class="empty-state large">No matching properties.</div>`}</div>`;
+}
+
+function renderExplorer(section: string): string {
+  if (!state) return `<div class="loading-state">Waiting for town state...</div>`;
+  if (section === "residents") {
+    return `<div class="explore-intro"><div><span>Everybody in town</span><h3>${state.residents.length} living residents</h3></div><p>Open anyone for decisions, relationships, money, calls, possessions, home goods, and their permanent life ledger.</p></div>
+      <div class="directory-grid resident-directory">${state.residents.map((resident) => `
+        <button class="directory-card resident-directory-card" data-resident="${h(resident.slug)}">
+          <header><span style="--resident-color:${h(resident.color)}"></span><div><h3>${h(resident.name)}</h3><p>${h(resident.lifeStage ?? "resident")} | ${h(resident.role)}</p></div><em>${h(resident.mood)}</em></header>
+          <b>${resident.indoors ? `Inside ${h(resident.building)}` : h(resident.activity)}</b>${miniNeedBars(resident)}
+        </button>`).join("")}</div>`;
+  }
+  if (section === "homes" || section === "buildings") return directoryProperties(section);
+  if (section === "shops") {
+    const businesses = state.economy?.businesses ?? [];
+    return `<div class="explore-intro"><div><span>Working economy</span><h3>${businesses.length} businesses</h3></div><p>Stock moves from the ferry into shops, residents buy what their households need, and shortages affect prices.</p></div>
+      <div class="directory-grid shop-directory">${businesses.map((business) => `<button class="directory-card shop-card" data-property="${h(business.propertySlug ?? "")}"><span class="card-state ${h(business.status ?? "active")}">${h(business.status ?? "active")}</span><h3>${h(business.name)}</h3><p>${h(business.industry ?? "local business")} | ${business.employees ?? 0} staff</p><div class="shop-metrics"><b>${formatCad(business.cash)}</b><span>${Math.round(business.inventoryUnits ?? 0)} goods</span><em>${business.lowStockItems ?? 0} low</em></div><footer><span>${formatCad(business.sales)} sales</span><em>${h(business.owner ?? "community-owned")}</em></footer></button>`).join("")}</div>`;
+  }
+  if (section === "calls") {
+    const calls = state.communications ?? [];
+    return `<div class="explore-intro"><div><span>Lagoon phone network</span><h3>${calls.length} recent calls</h3></div><p>Teen, adult, and senior residents call to talk, ask for help, arrange work, trade, and make plans.</p></div><div class="call-ledger">${calls.map((call) => `<article class="${call.visibility}"><span>${h(call.purpose)} | ${call.durationMinutes} min | ${h(call.visibility)}</span><h3><button data-resident="${h(call.caller)}">${h(call.callerName)}</button> called <button data-resident="${h(call.recipient)}">${h(call.recipientName)}</button></h3><p>${h(call.summary)}</p></article>`).join("") || `<div class="empty-state large">The first calls will appear during the next daytime phone window.</div>`}</div>`;
+  }
+  if (section === "story") return `<div class="story-explorer">${renderEvents(state)}${renderDocket(state)}</div>`;
+  const economy = state.economy;
+  const values = economy?.history?.map((point) => point.netWorth) ?? [];
+  const accounts = economy?.accounts ?? [];
+  return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town resident net worth</p></div>${sparkline(values)}</div>
+    <div class="metric-grid bank-metrics"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article><article><span>Retail goods</span><b>${Math.round(economy?.stockUnits ?? 0)}</b></article><article><span>Barters</span><b>${economy?.barters ?? 0}</b></article></div>
+    <div class="section-label"><span>All resident, household, and business accounts</span><b>${accounts.length}</b></div>
+    <div class="bank-ledger">${accounts.map((account) => `<article class="${h(account.ownerKind)}"${account.residentSlug ? ` data-resident="${h(account.residentSlug)}" role="button" tabindex="0"` : ""}><span class="account-mark">${h(account.ownerKind.slice(0, 1).toUpperCase())}</span><div><b>${h(account.owner)}</b><small>${h(account.name)} | ${h(account.type)} | ${h(account.status)}</small></div><em>${formatCad(account.balance)}</em></article>`).join("") || `<div class="empty-state">No financial accounts yet.</div>`}</div>
+    <div class="section-label"><span>Recent transactions</span><b>${economy?.transactions?.length ?? 0}</b></div>${renderLedgerEntries((economy?.transactions ?? []).map((entry) => ({ ...entry, title: entry.description })), "No posted transactions yet.")}`;
+}
+
+async function openExplorer(section: string, pushHistory = true): Promise<void> {
+  if (!state) return;
+  closeDossier();
+  const view = byId<HTMLElement>("explore-view");
+  view.hidden = false;
+  const titles: Record<string, string> = { residents: "Residents", homes: "Homes", buildings: "Buildings", shops: "Shops & businesses", bank: "Bank & economy", calls: "Phone network", story: "Living story" };
+  byId("explore-title").textContent = titles[section] ?? "Explore";
+  const content = byId("explore-content");
+  content.innerHTML = renderExplorer(section);
+  if (pushHistory) history.pushState(null, "", `#/explore/${section}`);
+}
+
+async function openProperty(slug: string, pushHistory = true): Promise<void> {
+  if (!slug) return;
+  const view = byId<HTMLElement>("explore-view");
+  view.hidden = false;
+  byId("explore-title").textContent = "Building";
+  const content = byId("explore-content");
+  content.innerHTML = `<div class="loading-state">Opening the building ledger...</div>`;
+  try {
+    const detail: PropertyDetail = await fetchProperty(slug);
+    const frame = ((detail.interiorVariant % 12) + 12) % 12;
+    const column = frame % 4;
+    const row = Math.floor(frame / 4);
+    byId("explore-title").textContent = detail.name;
+    content.innerHTML = `<div class="building-detail-head"><div><span>${h(detail.type)} | ${h(detail.status)}</span><h3>${h(detail.name)}</h3><p>${h(detail.address)} | ${detail.condition}% condition | ${formatCad(detail.value)}</p></div><button data-focus-place="${h(detail.mapLocation)}">Show on map</button></div>
+      <div class="building-detail-grid"><div class="property-interior" style="--interior-x:${column * 100 / 3}%;--interior-y:${row * 50}%" role="img" aria-label="${h(detail.name)} interior"></div><section><div class="section-label"><span>Inside now</span><b>${detail.residents.length}</b></div><div class="inside-list">${detail.residents.map((resident) => `<button data-resident="${h(resident.slug)}"><b>${h(resident.name)}</b><span>${h(resident.activity)}</span><em>${h(resident.mood)}</em></button>`).join("") || `<div class="empty-state">The building is empty.</div>`}</div></section></div>
+      <div class="section-label"><span>${detail.business ? "Shop stock" : "Home inventory"}</span><b>${detail.inventory.length}</b></div>${inventoryGrid(detail.inventory)}
+      <div class="section-label"><span>Building transactions</span><b>${detail.transactions.length}</b></div>${renderLedgerEntries(detail.transactions.map((entry) => ({ ...entry, title: entry.description })), "No business transactions recorded here.")}`;
+    if (pushHistory) history.pushState(null, "", `#/property/${encodeURIComponent(slug)}`);
+  } catch (error) {
+    content.innerHTML = `<div class="empty-state large"><b>Building ledger unavailable</b><p>${h(error instanceof Error ? error.message : "Please try again.")}</p><button data-retry-property="${h(slug)}">Retry</button></div>`;
+  }
+}
+
+function closeExplorer(clearHash = true): void {
+  byId<HTMLElement>("explore-view").hidden = true;
+  if (clearHash && location.hash.startsWith("#/")) history.replaceState(null, "", location.pathname + location.search);
 }
 
 function render(value: KrabvilleState): void {
@@ -626,13 +778,15 @@ async function openResident(slug: string): Promise<void> {
     const forecasts = state ? forecastResidents(detail, state) : [];
     const wants = [...(detail.wants ?? []), ...(detail.aspirations ?? []), ...detail.goals.map((goal) => ({ title: goal.scope, text: goal.description, status: `${goal.status} | ${goal.progress}%` }))];
     const inventory = [...new Set([...(detail.inventory ?? []), ...detail.possessions])];
+    const onPerson = detail.onPersonInventory ?? inventory.map((name) => ({ name, category: "personal", quantity: 1 }));
+    const homeInventory = detail.homeInventory ?? [];
     const relationshipRows = detail.relationships.slice().sort((left, right) => (right.affinity + right.trust - right.tension) - (left.affinity + left.trust - left.tension));
     const finance = detail.finances;
     byId("dossier-name").textContent = detail.name;
     byId("dossier-body").innerHTML = `
       <section class="resident-summary"><span style="--resident-color:${h(detail.color)}"></span><div><b>${h(detail.role)}${detail.lifeStage ? ` | ${h(detail.lifeStage)}` : ""}</b><p>${h(detail.activity)} at ${h(detail.location)}</p></div><em>${h(detail.mood)}</em></section>
       <nav class="detail-tabs" aria-label="Dossier sections">
-        <button class="active" data-detail-target="dossier-life">Life</button><button data-detail-target="dossier-needs">Needs & wants</button><button data-detail-target="dossier-family">Family</button><button data-detail-target="dossier-relationships">Relationships</button><button data-detail-target="dossier-secrets">Secrets & beliefs</button><button data-detail-target="dossier-health">Health & care</button><button data-detail-target="dossier-career">Career</button><button data-detail-target="dossier-finances">Finances</button><button data-detail-target="dossier-property">Property</button><button data-detail-target="dossier-memory">Memories</button><button data-detail-target="dossier-ledger">Life ledger</button>
+        <button class="active" data-detail-target="dossier-life">Life</button><button data-detail-target="dossier-needs">Needs</button><button data-detail-target="dossier-family">Family</button><button data-detail-target="dossier-relationships">Relationships</button><button data-detail-target="dossier-phone">Phone</button><button data-detail-target="dossier-secrets">Secrets</button><button data-detail-target="dossier-health">Health</button><button data-detail-target="dossier-career">Career</button><button data-detail-target="dossier-finances">Money</button><button data-detail-target="dossier-property">Home & goods</button><button data-detail-target="dossier-memory">Memories</button><button data-detail-target="dossier-ledger">Life ledger</button>
       </nav>
 
       <section class="detail-section dossier-section" id="dossier-life">
@@ -649,31 +803,42 @@ async function openResident(slug: string): Promise<void> {
 
       <section class="detail-section dossier-section" id="dossier-relationships"><div class="section-label"><span>Relationship map</span><b>${detail.relationships.length}</b></div><canvas class="relationship-canvas" id="relationship-canvas"></canvas><div class="relationship-list">${relationshipRows.map((relationship) => `<article><b>${h(relationship.otherName)}</b><span>Affinity ${relationship.affinity} | Trust ${relationship.trust} | Tension ${relationship.tension}</span>${relationship.kinship ? `<small>${h(relationship.kinship)}</small>` : ""}</article>`).join("")}</div></section>
 
+      <section class="detail-section dossier-section" id="dossier-phone"><div class="section-label"><span>Phone</span><b>${h(detail.phone?.number ?? "No phone")}</b></div><div class="phone-card"><i data-lucide="phone"></i><div><span>${h(detail.phone?.device ?? "No device issued")}</span><b>${h(detail.phone?.number ?? "Children receive a phone as teens")}</b></div><em>${detail.phone?.active ? "connected" : "offline"}</em></div><div class="section-label"><span>Recent calls</span><b>${detail.communications?.length ?? 0}</b></div><div class="call-ledger">${detail.communications?.map((call) => `<article class="${h(call.visibility)}"><span>${h(call.direction)} | ${h(call.purpose)} | ${call.durationMinutes} min | ${h(call.visibility)}</span><h3>${h(call.otherName)}</h3><p>${h(call.summary)}</p></article>`).join("") || `<div class="empty-state">No calls yet.</div>`}</div></section>
+
       <section class="detail-section dossier-section" id="dossier-secrets"><div class="section-label"><span>Secrets</span><b>${detail.secrets?.length ?? 0}</b></div>${renderNotes(detail.secrets, "No spectator-visible secrets yet.")}<div class="section-label"><span>Beliefs and gossip</span><b>${detail.beliefs?.length ?? 0}</b></div>${renderNotes(detail.beliefs, "No conflicting beliefs have formed yet.")}</section>
 
       <section class="detail-section dossier-section" id="dossier-health"><div class="section-label"><span>Health and care</span><b>${h(detail.health?.status ?? "No v3 record")}</b></div><div class="fact-grid"><article><span>Conditions</span><b>${h(detail.health?.conditions?.join(", ") || "None published")}</b></article><article><span>Caregiver</span><b>${h(detail.health?.caregiver ?? "Independent")}</b></article><article><span>Care plan</span><b>${h(detail.health?.care?.join(", ") || "None")}</b></article><article><span>Stress</span><b>${detail.health?.stress ?? "--"}</b></article></div></section>
 
       <section class="detail-section dossier-section" id="dossier-career"><div class="section-label"><span>Career</span><b>${h(detail.career?.status ?? "Current")}</b></div><div class="fact-grid"><article><span>Role</span><b>${h(detail.career?.title ?? detail.role)}</b></article><article><span>Employer</span><b>${h(detail.career?.employer ?? detail.workplace)}</b></article><article><span>Schedule</span><b>${h(detail.career?.schedule ?? detail.routine)}</b></article><article><span>Daily income</span><b>${formatCad(detail.career?.income)}</b></article></div></section>
 
-      <section class="detail-section dossier-section" id="dossier-finances"><div class="section-label"><span>Finances and net worth</span><b>${formatCad(finance?.netWorth)}</b></div><div class="metric-grid"><article><span>Cash</span><b>${formatCad(finance?.cash)}</b></article><article><span>Chequing</span><b>${formatCad(finance?.chequing)}</b></article><article><span>Savings</span><b>${formatCad(finance?.savings)}</b></article><article><span>Investments</span><b>${formatCad(finance?.investments)}</b></article><article><span>Debt</span><b>${formatCad(finance?.debt)}</b></article><article><span>Net worth</span><b>${formatCad(finance?.netWorth)}</b></article></div>${finance ? "" : `<div class="empty-state">The v2 API does not publish private account balances. KVsim v3 will fill this ledger.</div>`}</section>
+      <section class="detail-section dossier-section" id="dossier-finances"><div class="section-label"><span>Finances and net worth</span><b>${formatCad(finance?.netWorth)}</b></div><div class="resident-finance-chart">${sparkline(finance?.history?.map((point) => point.netWorth) ?? [])}</div><div class="metric-grid"><article><span>Cash</span><b>${formatCad(finance?.cash)}</b></article><article><span>Chequing</span><b>${formatCad(finance?.chequing)}</b></article><article><span>Savings</span><b>${formatCad(finance?.savings)}</b></article><article><span>Investments</span><b>${formatCad(finance?.investments)}</b></article><article><span>Debt</span><b>${formatCad(finance?.debt)}</b></article><article><span>Net worth</span><b>${formatCad(finance?.netWorth)}</b></article></div><div class="section-label"><span>Accounts</span><b>${finance?.accounts?.length ?? 0}</b></div><div class="account-list">${finance?.accounts?.map((account) => `<article><span>${h(account.type)} | ${h(account.status)}</span><b>${h(account.name)}</b><em>${formatCad(account.balance)}</em></article>`).join("") || `<div class="empty-state">No accounts.</div>`}</div><div class="section-label"><span>Transactions</span><b>${detail.transactions?.length ?? 0}</b></div>${renderLedgerEntries((detail.transactions ?? []).map((entry) => ({ ...entry, title: entry.description })), "No posted transactions yet.")}</section>
 
-      <section class="detail-section dossier-section" id="dossier-property"><div class="section-label"><span>Property and inventory</span><b>${inventory.length}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Workplace</span><b>${h(detail.workplace)}</b></article></div><div class="possession-list">${inventory.map((item) => `<span>${h(item)}</span>`).join("") || `<div class="empty-state">No inventory recorded.</div>`}</div>${detail.properties?.map((property) => `<article class="property-row"><span>${h(property.type ?? "Property")}</span><b>${h(property.name)}</b><small>${formatCad(property.value)}</small></article>`).join("") ?? ""}</section>
+      <section class="detail-section dossier-section" id="dossier-property"><div class="section-label"><span>Home and property</span><b>${detail.properties?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Workplace</span><b>${h(detail.workplace)}</b></article></div>${detail.properties?.map((property) => `<button class="property-row" data-property="${h(property.slug ?? "")}"><span>${h(property.type ?? "Property")}</span><b>${h(property.name)}</b><small>${formatCad(property.value)}</small></button>`).join("") ?? ""}<div class="section-label"><span>Carried now</span><b>${onPerson.length}</b></div>${inventoryGrid(onPerson)}<div class="section-label"><span>Stocked at home</span><b>${homeInventory.length}</b></div>${inventoryGrid(homeInventory)}</section>
 
       <section class="detail-section dossier-section" id="dossier-memory"><div class="section-label"><span>Recent memories</span><b>${detail.memories.length}</b></div><div class="memory-list">${detail.memories.slice(0, 16).map((memory) => `<article><span>${h(memory.kind)} | salience ${memory.salience}</span><p>${h(memory.content)}</p></article>`).join("") || `<div class="empty-state">No retained memories yet.</div>`}</div></section>
 
       <section class="detail-section dossier-section" id="dossier-ledger"><div class="section-label"><span>Life ledger</span><b>${detail.lifeLedger?.length ?? 0}</b></div>${renderLedgerEntries(detail.lifeLedger ?? [], "Births, moves, relationships, careers, money, and other lasting changes will collect here.")}</section>
     `;
+    const sections = [...byId("dossier-body").querySelectorAll<HTMLElement>(".dossier-section")];
+    sections.forEach((section, index) => { section.hidden = index !== 0; });
     for (const button of byId("dossier-body").querySelectorAll<HTMLButtonElement>("[data-detail-target]")) {
       button.addEventListener("click", () => {
         const target = document.getElementById(button.dataset.detailTarget ?? "");
         if (!target) return;
         byId("dossier-body").querySelectorAll("[data-detail-target]").forEach((item) => item.classList.toggle("active", item === button));
-        target.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+        sections.forEach((section) => { section.hidden = section !== target; });
+        byId("dossier-body").scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       });
     }
+    for (const button of byId("dossier-body").querySelectorAll<HTMLButtonElement>("[data-property]")) {
+      button.addEventListener("click", () => { closeDossier(); void openProperty(button.dataset.property ?? ""); });
+    }
+    createIcons({ icons: { Phone } });
     requestAnimationFrame(() => drawRelationshipGraph(byId<HTMLCanvasElement>("relationship-canvas"), detail));
   } catch (error) {
-    byId("dossier-body").innerHTML = `<div class="empty-state large">${h(error instanceof Error ? error.message : "Dossier unavailable")}</div>`;
+    byId("dossier-name").textContent = state?.residents.find((resident) => resident.slug === slug)?.name ?? "Resident";
+    byId("dossier-body").innerHTML = `<div class="empty-state large"><b>Dossier temporarily unavailable</b><p>${h(error instanceof Error ? error.message : "Please try again.")}</p><button id="dossier-retry">Retry</button></div>`;
+    byId("dossier-retry").addEventListener("click", () => void openResident(slug));
   }
 }
 
@@ -757,11 +922,43 @@ byId("story-content").addEventListener("click", async (event) => {
   if (button.hasAttribute("data-open-archive")) void openArchive();
 });
 
+for (const button of document.querySelectorAll<HTMLButtonElement>("[data-explore]")) {
+  button.addEventListener("click", () => void openExplorer(button.dataset.explore ?? "residents"));
+}
+
+byId("explore-content").addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest<HTMLButtonElement>("button");
+  if (!button) return;
+  if (button.dataset.resident) {
+    closeExplorer(false);
+    void openResident(button.dataset.resident);
+  } else if (button.dataset.property) {
+    void openProperty(button.dataset.property);
+  } else if (button.dataset.focusPlace) {
+    world?.focus(button.dataset.focusPlace);
+    closeExplorer();
+  } else if (button.dataset.retryProperty) {
+    void openProperty(button.dataset.retryProperty, false);
+  }
+});
+
 byId("zoom-in").addEventListener("click", () => world?.zoomIn());
 byId("zoom-out").addEventListener("click", () => world?.zoomOut());
 byId("map-fit").addEventListener("click", () => world?.fit());
 byId("dossier-close").addEventListener("click", closeDossier);
+byId("explore-close").addEventListener("click", () => closeExplorer());
 byId("interior-close").addEventListener("click", hideInterior);
+byId("interior-open").addEventListener("click", () => {
+  if (!currentInteriorSlug) return;
+  hideInterior();
+  void openProperty(currentInteriorSlug);
+});
+byId("interior-occupants").addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const resident = event.target.closest<HTMLButtonElement>("[data-resident]")?.dataset.resident;
+  if (resident) { hideInterior(); void openResident(resident); }
+});
 byId("archive-open").addEventListener("click", () => void openArchive());
 byId("archive-close").addEventListener("click", () => { byId("archive-view").hidden = true; });
 byId("roster-toggle").addEventListener("click", () => byId("resident-rail").classList.toggle("open"));
@@ -772,8 +969,17 @@ document.addEventListener("keydown", (event) => {
   closeDossier();
   hideInterior();
   byId("archive-view").hidden = true;
+  closeExplorer();
   byId("resident-rail").classList.remove("open");
   byId("story-rail").classList.remove("open");
+});
+
+window.addEventListener("popstate", () => {
+  const exploreMatch = location.hash.match(/^#\/explore\/([a-z-]+)$/);
+  const propertyMatch = location.hash.match(/^#\/property\/([^/]+)$/);
+  if (exploreMatch) void openExplorer(exploreMatch[1]!, false);
+  else if (propertyMatch) void openProperty(decodeURIComponent(propertyMatch[1]!), false);
+  else closeExplorer(false);
 });
 
 connectEvents((type, payload) => {
