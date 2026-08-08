@@ -85,6 +85,8 @@ function projectedPosition(resident: Resident): Point {
   return [x, y];
 }
 
+type ResidentPeekHandler = (resident: Resident | null, x?: number, y?: number) => void;
+
 class LagoonScene extends Phaser.Scene {
   private state: KrabvilleState | null = null;
   private residents = new Map<string, ResidentView>();
@@ -99,7 +101,10 @@ class LagoonScene extends Phaser.Scene {
   private currentWeather = "";
   private readonly reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  constructor(private readonly onSelect: (slug: string) => void) {
+  constructor(
+    private readonly onSelect: (slug: string) => void,
+    private readonly onPeek: ResidentPeekHandler,
+  ) {
     super("lagoon");
   }
 
@@ -210,8 +215,15 @@ class LagoonScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setVisible(false);
     const container = this.add.container(resident.x, resident.y, [ring, sprite, label, thought]).setDepth(50 + resident.y / 1000);
+    const showPeek = (pointer: Phaser.Input.Pointer) => {
+      this.onPeek(this.residents.get(resident.slug)?.resident ?? resident, pointer.x, pointer.y);
+    };
+    sprite.on("pointerover", showPeek);
+    sprite.on("pointermove", showPeek);
+    sprite.on("pointerout", () => this.onPeek(null));
     sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       pointer.event.stopPropagation();
+      this.onPeek(null);
       this.selectResident(resident.slug);
       this.onSelect(resident.slug);
     });
@@ -376,8 +388,8 @@ export class LagoonWorld {
   private readonly scene: LagoonScene;
   private readonly game: Phaser.Game;
 
-  constructor(parent: string, onSelect: (slug: string) => void) {
-    this.scene = new LagoonScene(onSelect);
+  constructor(parent: string, onSelect: (slug: string) => void, onPeek: ResidentPeekHandler) {
+    this.scene = new LagoonScene(onSelect, onPeek);
     const element = document.getElementById(parent);
     if (!element) throw new Error("map parent missing");
     this.game = new Phaser.Game({
