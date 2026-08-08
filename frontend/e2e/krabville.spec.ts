@@ -36,9 +36,15 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   const rosterToggle = page.locator("#roster-toggle");
   if (await rosterToggle.isVisible()) await rosterToggle.click();
-  await page.locator(".resident-row").first().click();
+  const firstResident = page.locator(".resident-row").first();
+  await firstResident.hover();
+  await expect(page.locator("#resident-peek")).toBeVisible();
+  await expect(page.locator("#resident-peek .peek-need")).toHaveCount(5);
+  await expect(page.locator("#resident-peek .peek-forecast")).toContainText("Likely next");
+  await firstResident.click();
   await expect(page.locator("#dossier")).toBeVisible();
   await expect(page.locator("#dossier-name")).not.toHaveText("Loading...");
+  await expect(page.locator("#dossier .forecast-band")).toContainText("Likely next");
   await page.getByRole("button", { name: "Relationships" }).click();
   await expect(page.locator("#relationship-canvas")).toBeVisible();
   await page.keyboard.press("Escape");

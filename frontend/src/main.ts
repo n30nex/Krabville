@@ -20,7 +20,7 @@ import {
 } from "lucide";
 
 import { connectEvents, fetchResident, fetchSeason, fetchSeasons, fetchState, vote } from "./api";
-import type { KrabvilleState, Point, ResidentDetail } from "./types";
+import type { KrabvilleState, Point, Resident, ResidentDetail } from "./types";
 import "./style.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -44,7 +44,7 @@ app.innerHTML = `
         <div class="rail-heading"><span>Residents</span><b id="resident-count">0</b></div>
         <div class="resident-list" id="resident-list"></div>
       </aside>
-      <section class="map-stage" aria-label="Live map of Krabville">
+      <section class="map-stage" id="map-stage" aria-label="Live map of Krabville">
         <div id="world"></div>
         <div class="map-tools" aria-label="Map controls">
           <button class="icon-button" id="zoom-in" aria-label="Zoom in"><i data-lucide="zoom-in"></i></button>
@@ -53,6 +53,7 @@ app.innerHTML = `
         </div>
         <div class="weather-pill" id="weather-pill"><i data-lucide="cloud-sun"></i><span>Weather pending</span></div>
         <button class="story-toggle" id="story-toggle"><i data-lucide="panel-right-open"></i><span>Town story</span></button>
+        <aside class="resident-peek" id="resident-peek" role="tooltip" hidden></aside>
         <div class="live-ticker"><span class="ticker-signal"></span><b>LIVE</b><p id="live-ticker">Connecting to the town ledger...</p></div>
       </section>
       <aside class="story-rail" id="story-rail">
@@ -118,6 +119,75 @@ const formatTime = (minutes: number): string => {
   return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
 };
 
+const clampNeed = (value: number): number => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 50));
+
+const displayedNeeds = (resident: Pick<Resident, "needs">): Array<[string, number]> => [
+  ["Energy", clampNeed(Number(resident.needs.energy ?? 50))],
+  ["Hunger", 100 - clampNeed(Number(resident.needs.hunger ?? 50))],
+  ["Social", 100 - clampNeed(Number(resident.needs.social ?? 50))],
+  ["Purpose", clampNeed(Number(resident.needs.purpose ?? 50))],
+  ["Comfort", clampNeed(Number(resident.needs.comfort ?? 50))],
+];
+
+interface ResidentForecast {
+  destination: string;
+  activity: string;
+  confidence: string;
+  reason: string;
+}
+
+function forecastResident(resident: Resident, value: KrabvilleState): ResidentForecast {
+  const distance = Math.hypot(resident.destinationX - resident.x, resident.destinationY - resident.y);
+  if (resident.path.length > 0 || distance > 6) {
+    return {
+      destination: resident.location,
+      activity: resident.activity,
+      confidence: "En route",
+      reason: "Their current path already points there.",
+    };
+  }
+
+  const needs = resident.needs;
+  const energy = clampNeed(Number(needs.energy ?? 70));
+  const hunger = clampNeed(Number(needs.hunger ?? 25));
+  const social = clampNeed(Number(needs.social ?? 45));
+  const purpose = clampNeed(Number(needs.purpose ?? 55));
+  const openness = Number(resident.traits.openness ?? 50);
+  const sociability = Number(resident.traits.sociability ?? 50);
+  const conscientiousness = Number(resident.traits.conscientiousness ?? 50);
+  const hour = (value.season?.worldMinutes ?? 720) / 60;
+  const mealWindow = (hour >= 6.5 && hour < 8) || (hour >= 12 && hour < 13.5) || (hour >= 18 && hour < 19.5);
+  const workWindow = (hour >= 8.5 && hour < 12) || (hour >= 13 && hour < 17.5);
+  const sleepWindow = hour >= 22 || hour < 6;
+  const evening = hour >= 17 && hour < 22;
+  const harshWeather = ["rain", "storm", "fog", "first-snow"].includes(value.season?.weather.condition ?? "");
+  const options = [
+    { score: (100 - energy) * 1.25 + (sleepWindow ? 95 : 0), activity: "sleeping", destination: resident.home, reason: "Energy and the hour point home." },
+    { score: hunger * 1.35 + (mealWindow ? 52 : 0) + social * 0.12, activity: "sharing a meal", destination: social > 48 ? "Hobbs Cafe" : resident.home, reason: "Hunger and meal timing point toward food." },
+    { score: (100 - purpose) * 0.8 + (workWindow ? 74 : 0) + conscientiousness * 0.2, activity: `working as ${resident.role}`, destination: resident.workplace, reason: "Work hours and purpose point to their workplace." },
+    { score: social * 0.9 + (evening ? 35 : 0) + sociability * 0.25, activity: "spending time with neighbours", destination: "Town Square", reason: "Social need and the hour point to the square." },
+    { score: (100 - purpose) * 0.75 + openness * 0.24, activity: "making progress on a personal project", destination: resident.workplace, reason: "Purpose and curiosity point to project time." },
+    { score: 28 + openness * 0.24 + (hour >= 7 && hour < 21 ? 18 : -20) - (harshWeather ? 30 : 0), activity: "taking an unhurried walk around the Lagoon", destination: "Town Square", reason: "Their needs are steady enough for a Lagoon walk." },
+  ];
+  if (value.currentEvent?.participants.includes(resident.slug)) {
+    options.push({
+      score: 72 + (hour >= 14 && hour < 18 ? 38 : 0) + Number(resident.traits.agreeableness ?? 50) * 0.2,
+      activity: `responding to ${value.currentEvent.title.toLowerCase()}`,
+      destination: "Town Square",
+      reason: "They are involved in today's catalyst.",
+    });
+  }
+  options.sort((left, right) => right.score - left.score);
+  const best = options[0]!;
+  const margin = best.score - (options[1]?.score ?? 0);
+  return {
+    destination: best.destination,
+    activity: best.activity,
+    confidence: margin >= 35 ? "Strong signal" : margin >= 15 ? "Likely" : "Possible",
+    reason: `${value.season?.status === "running" ? "" : "When time resumes, "}${best.reason.charAt(0).toLowerCase()}${best.reason.slice(1)}`,
+  };
+}
+
 const shortModel = (model: string): string =>
   model.replace("gpt-", "GPT ").replace("-codex", " Codex").replaceAll("-", " ");
 
@@ -134,7 +204,7 @@ async function ensureWorld(): Promise<import("./game").LagoonWorld> {
   if (world) return world;
   if (!worldLoading) {
     worldLoading = import("./game").then(({ LagoonWorld }) => {
-      world = new LagoonWorld("world", (slug) => void openResident(slug));
+      world = new LagoonWorld("world", (slug) => void openResident(slug), showResidentPeek);
       if (state) world.update(state);
       return world;
     });
@@ -177,8 +247,59 @@ function renderRoster(value: KrabvilleState): void {
     )
     .join("");
   for (const button of list.querySelectorAll<HTMLButtonElement>("[data-resident]")) {
-    button.addEventListener("click", () => void openResident(button.dataset.resident ?? ""));
+    const resident = value.residents.find((item) => item.slug === button.dataset.resident);
+    button.addEventListener("click", () => {
+      hideResidentPeek();
+      void openResident(button.dataset.resident ?? "");
+    });
+    if (!resident) continue;
+    button.addEventListener("mouseenter", (event) => {
+      const stage = byId("map-stage").getBoundingClientRect();
+      showResidentPeek(resident, 0, event.clientY - stage.top);
+    });
+    button.addEventListener("mouseleave", hideResidentPeek);
+    button.addEventListener("focus", () => showResidentPeek(resident, 0, button.offsetTop + button.offsetHeight / 2));
+    button.addEventListener("blur", hideResidentPeek);
   }
+}
+
+function needTone(value: number): string {
+  return value < 30 ? "critical" : value < 58 ? "warning" : "good";
+}
+
+function compactNeedBar(label: string, value: number): string {
+  return `<div class="peek-need"><span>${h(label)}</span><div><i class="${needTone(value)}" style="width:${value}%"></i></div><b>${Math.round(value)}</b></div>`;
+}
+
+function showResidentPeek(resident: Resident | null, x = 0, y = 0): void {
+  if (!resident || !state) {
+    hideResidentPeek();
+    return;
+  }
+  const peek = byId<HTMLElement>("resident-peek");
+  const forecast = forecastResident(resident, state);
+  const updateKey = `${resident.slug}:${resident.updatedTick}:${state.season?.worldMinutes ?? 0}`;
+  if (peek.dataset.updateKey !== updateKey) {
+    peek.innerHTML = `
+      <div class="peek-head"><span style="--resident-color:${h(resident.color)}"></span><div><b>${h(resident.name)}</b><small>${h(resident.activity)}</small></div><em>${h(resident.mood)}</em></div>
+      <div class="peek-needs">${displayedNeeds(resident).map(([label, need]) => compactNeedBar(label, need)).join("")}</div>
+      <div class="peek-forecast"><span>Likely next | ${h(forecast.confidence)}</span><b>${h(forecast.destination)}</b><small>${h(forecast.activity)}. ${h(forecast.reason)}</small></div>`;
+    peek.dataset.updateKey = updateKey;
+  }
+  peek.hidden = false;
+  peek.dataset.x = String(x);
+  peek.dataset.y = String(y);
+  requestAnimationFrame(() => {
+    const stage = byId("map-stage");
+    const left = Math.max(8, Math.min(stage.clientWidth - peek.offsetWidth - 8, x + 18));
+    const top = Math.max(8, Math.min(stage.clientHeight - peek.offsetHeight - 8, y - peek.offsetHeight / 2));
+    peek.style.left = `${left}px`;
+    peek.style.top = `${top}px`;
+  });
+}
+
+function hideResidentPeek(): void {
+  byId<HTMLElement>("resident-peek").hidden = true;
 }
 
 function eventCard(value: KrabvilleState): string {
@@ -304,7 +425,8 @@ async function refresh(): Promise<void> {
 }
 
 function needBar(label: string, value: number): string {
-  return `<div class="need-row"><span>${h(label)}</span><div><i style="width:${Math.max(0, Math.min(100, value))}%"></i></div><b>${Math.round(value)}</b></div>`;
+  const displayed = label === "hunger" || label === "social" ? 100 - clampNeed(value) : clampNeed(value);
+  return `<div class="need-row"><span>${h(label)}</span><div><i class="${needTone(displayed)}" style="width:${displayed}%"></i></div><b>${Math.round(displayed)}</b></div>`;
 }
 
 function drawRelationshipGraph(canvas: HTMLCanvasElement, detail: ResidentDetail): void {
@@ -352,6 +474,7 @@ function drawRelationshipGraph(canvas: HTMLCanvasElement, detail: ResidentDetail
 
 async function openResident(slug: string): Promise<void> {
   if (!slug) return;
+  hideResidentPeek();
   selectedSlug = slug;
   world?.select(slug);
   if (state) renderRoster(state);
@@ -361,12 +484,14 @@ async function openResident(slug: string): Promise<void> {
   byId("dossier-body").innerHTML = `<div class="loading-state">Opening the resident ledger...</div>`;
   try {
     const detail = await fetchResident(slug);
+    const forecast = state ? forecastResident(detail, state) : null;
     byId("dossier-name").textContent = detail.name;
     byId("dossier-body").innerHTML = `
       <section class="resident-summary" id="dossier-overview"><span style="--resident-color:${h(detail.color)}"></span><div><b>${h(detail.role)}</b><p>${h(detail.activity)} at ${h(detail.location)}</p></div></section>
       <section class="profile-band"><p>${h(detail.about)}</p><small>${h(detail.routine)}</small></section>
       <section class="thought-band"><span>Public thought</span><p>${h(detail.publicThought)}</p><small>${h(detail.intention)}</small></section>
       <nav class="detail-tabs" aria-label="Dossier sections"><button class="active" data-detail-target="dossier-overview">Overview</button><button data-detail-target="dossier-memory">Memory</button><button data-detail-target="dossier-relationships">Relationships</button></nav>
+      ${forecast ? `<section class="forecast-band"><span>Likely next | ${h(forecast.confidence)}</span><b>${h(forecast.destination)}</b><p>${h(forecast.activity)}. ${h(forecast.reason)}</p></section>` : ""}
       <section class="detail-section"><div class="section-label"><span>Needs</span><b>${h(detail.mood)}</b></div>${Object.entries(detail.needs).map(([key, value]) => needBar(key, value)).join("")}</section>
       <section class="detail-section"><div class="section-label"><span>Possessions</span><b>${detail.possessions.length}</b></div><div class="possession-list">${detail.possessions.map((item) => `<span>${h(item)}</span>`).join("")}</div></section>
       <section class="detail-section" id="dossier-relationships"><div class="section-label"><span>Relationship map</span><b>${detail.relationships.length}</b></div><canvas class="relationship-canvas" id="relationship-canvas"></canvas></section>
