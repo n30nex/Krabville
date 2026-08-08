@@ -675,6 +675,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Robots-Tag"] = "noindex, noarchive"
+        if response.headers.get("Content-Type", "").lower().startswith("text/html"):
+            response.headers["Cache-Control"] = "no-store, no-transform"
         secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
         if not security.voter_key(request.cookies.get("kv_voter")):
             response.set_cookie("kv_voter", security.new_voter_cookie(), httponly=True, secure=secure, samesite="lax", max_age=7776000)
