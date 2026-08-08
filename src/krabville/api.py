@@ -346,7 +346,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             quick = connection.execute("PRAGMA quick_check").fetchone()[0]
             season = _season(connection)
-            return {"ok": quick == "ok", "database": quick, "seasonStatus": season["status"] if season else "draft"}
+            season_payload = (
+                {
+                    "number": int(season["number"]),
+                    "status": season["status"],
+                    "day": int(season["current_day"]),
+                    "progressPercent": round(
+                        (int(season["current_tick"]) / int(season["target_ticks"])) * 100,
+                        2,
+                    ),
+                    "modelLocked": bool(season["model_locked"]),
+                    "modelDegraded": bool(season["model_degraded"]),
+                }
+                if season
+                else None
+            )
+            return {
+                "ok": quick == "ok",
+                "database": quick,
+                "seasonStatus": season["status"] if season else "draft",
+                "season": season_payload,
+                "models": {
+                    "primary": settings.primary_model,
+                    "primaryReasoning": "low",
+                    "fallback": settings.fallback_model,
+                    "fallbackReasoning": "high",
+                },
+                "usage": _usage(connection, int(season["id"]), settings) if season else None,
+                "residentCount": int(connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0]),
+                "updatedAt": now_iso(),
+            }
         finally:
             connection.close()
 
