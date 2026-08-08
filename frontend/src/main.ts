@@ -239,6 +239,8 @@ const shortModel = (model: string): string =>
 let state: KrabvilleState | null = null;
 let selectedSlug: string | null = null;
 let storyTab = "ledger";
+let storyMarkup = "";
+let storyMarkupTab = "";
 let lastFreshAt = 0;
 let refreshPending: Promise<void> | null = null;
 
@@ -512,7 +514,11 @@ function renderStory(value: KrabvilleState): void {
     vote: () => renderPoll(value),
     seasons: () => renderSeasons(value),
   };
-  content.innerHTML = (views[storyTab] ?? views.ledger!)();
+  const nextMarkup = (views[storyTab] ?? views.ledger!)();
+  if (storyMarkupTab === storyTab && storyMarkup === nextMarkup) return;
+  storyMarkupTab = storyTab;
+  storyMarkup = nextMarkup;
+  content.innerHTML = nextMarkup;
 }
 
 function render(value: KrabvilleState): void {
