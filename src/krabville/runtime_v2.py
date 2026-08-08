@@ -768,6 +768,7 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
         FROM residents r JOIN financial_accounts a ON a.resident_id=r.id AND a.name='Personal chequing'
         LEFT JOIN employment e ON e.resident_id=r.id AND e.status IN ('active','leave')
         JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+          AND l.current_stage IN ('teen','adult','senior')
         ORDER BY r.id
         """
     ):

@@ -89,6 +89,9 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .peek-head b { font-size: 13px; }
 .peek-head small { margin-top: 2px; color: var(--muted); font-size: 10px; }
 .peek-head em { color: var(--cyan); font-size: 9px; font-style: normal; text-transform: uppercase; }
+.peek-care { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid rgba(99,216,227,.16); background: rgba(96,211,148,.08); }
+.peek-care span { color: var(--green); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.peek-care b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .peek-needs { padding: 7px 10px; }
 .peek-need { display: grid; grid-template-columns: 48px minmax(0,1fr) 24px; align-items: center; gap: 6px; min-height: 20px; font-size: 9px; }
 .peek-need > span { color: #c8dadd; }
@@ -264,12 +267,12 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .money-chart polyline { fill: none; stroke: var(--green); stroke-width: 2.5; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 5px rgba(96,211,148,.5)); }
 .empty-chart { min-height: 90px; display: grid; place-items: center; color: var(--muted); font-size: 11px; text-align: center; }
 .bank-metrics { grid-template-columns: repeat(6,minmax(0,1fr)); margin-bottom: 16px; }
-.bank-ledger > article { min-height: 58px; display: grid; grid-template-columns: 32px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14,33,40,.72); color: inherit; text-align: left; }
-.bank-ledger > article[role="button"] { cursor: pointer; }
-.bank-ledger > article[role="button"]:hover { border-color: rgba(99,216,227,.4); background: rgba(25,55,62,.76); }
+.bank-ledger > article, .bank-ledger > button { width: 100%; min-height: 58px; display: grid; grid-template-columns: 32px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14,33,40,.72); color: inherit; text-align: left; }
+.bank-ledger > button { cursor: pointer; }
+.bank-ledger > button:hover { border-color: rgba(99,216,227,.4); background: rgba(25,55,62,.76); }
 .account-mark { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid rgba(99,216,227,.25); border-radius: 50%; background: #17363e; color: var(--cyan); font-size: 10px; font-weight: 900; }
-.bank-ledger > article.household .account-mark { color: var(--amber); }
-.bank-ledger > article.business .account-mark { color: var(--green); }
+.bank-ledger > .household .account-mark { color: var(--amber); }
+.bank-ledger > .business .account-mark { color: var(--green); }
 .bank-ledger b, .bank-ledger small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bank-ledger b { font-size: 12px; }
 .bank-ledger small { margin-top: 3px; color: var(--muted); font-size: 9px; }

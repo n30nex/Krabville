@@ -137,6 +137,7 @@ export interface Resident {
   spriteVariant?: number;
   indoors?: boolean;
   building?: string | null;
+  care?: { state: string; caregiver?: string | null };
   family?: FamilyLink[];
   secrets?: PublicNote[];
   beliefs?: PublicNote[];

@@ -878,6 +878,91 @@ def _snapshot_finances(connection: sqlite3.Connection, season_id: int, day: int,
     return count
 
 
+def repair_dependent_finances(connection: sqlite3.Connection) -> int:
+    """Reverse invalid personal debt created for babies and children by older builds."""
+
+    season = connection.execute(
+        "SELECT id,current_day,current_tick FROM seasons WHERE status IN ('running','paused') ORDER BY number DESC LIMIT 1"
+    ).fetchone()
+    if not season:
+        return 0
+    clearing = connection.execute(
+        """
+        SELECT a.id FROM financial_accounts a JOIN businesses b ON b.id=a.business_id
+        WHERE b.name='Krabville Credit Union' AND a.name='Operating'
+        """
+    ).fetchone()
+    if not clearing:
+        return 0
+    accounts = list(connection.execute(
+        """
+        SELECT DISTINCT a.id,a.resident_id,r.name FROM financial_accounts a
+        JOIN residents r ON r.id=a.resident_id
+        JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+        JOIN debts d ON d.borrower_account_id=a.id
+        WHERE l.current_stage IN ('baby','child')
+          AND d.status IN ('current','late','defaulted') AND d.outstanding_cents>0
+        ORDER BY a.id
+        """
+    ))
+    if not accounts:
+        return 0
+    corrected = 0
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        for account in accounts:
+            key = f"dependent-debt-correction:{account['id']}"
+            transaction = connection.execute(
+                "SELECT id FROM financial_transactions WHERE season_id=? AND external_key=?",
+                (season["id"], key),
+            ).fetchone()
+            balance = _account_balance(connection, int(account["id"]))
+            if not transaction and balance:
+                transaction_id = int(connection.execute(
+                    """
+                    INSERT INTO financial_transactions(
+                      season_id,tick,category,description,status,external_key,created_at,posted_at
+                    ) VALUES(?,?,'dependent_debt_correction',?,'posted',?,?,?) RETURNING id
+                    """,
+                    (
+                        season["id"], season["current_tick"],
+                        f"Correct invalid dependent charges for {account['name']}",
+                        key, _now(), _now(),
+                    ),
+                ).fetchone()[0])
+                connection.executemany(
+                    "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
+                    (
+                        (transaction_id, int(account["id"]), -balance, "dependent charge reversal"),
+                        (transaction_id, int(clearing["id"]), balance, "dependent charge reversal offset"),
+                    ),
+                )
+            connection.execute(
+                """
+                UPDATE debts SET status='forgiven',outstanding_cents=0,
+                  closed_season_id=?,closed_tick=?
+                WHERE borrower_account_id=? AND status IN ('current','late','defaulted')
+                """,
+                (season["id"], season["current_tick"], account["id"]),
+            )
+            connection.execute(
+                """
+                UPDATE financial_accounts SET status='closed',closed_season_id=?,closed_tick=?
+                WHERE id=?
+                """,
+                (season["id"], season["current_tick"], account["id"]),
+            )
+            corrected += 1
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    _snapshot_finances(
+        connection, int(season["id"]), int(season["current_day"]), int(season["current_tick"])
+    )
+    return corrected
+
+
 def _story_event(
     connection: sqlite3.Connection,
     season_id: int,

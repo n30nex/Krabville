@@ -184,6 +184,9 @@ def _run_scenario(settings) -> dict[str, str]:
     assert len(committed) == 12
     assert all(row["phase"] == "committed" and row["committed_tick"] == 1 for row in committed)
 
+    settlement_residents = connection.execute(
+        "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1 AND current_stage IN ('teen','adult','senior')"
+    ).fetchone()[0]
     result = {"status": "running"}
     while result["status"] == "running":
         result = advance_tick(connection)
@@ -219,9 +222,9 @@ def _run_scenario(settings) -> dict[str, str]:
         """,
         (first_id,),
     ))
-    assert len(settlements) == 12 * DAYS_PER_SEASON
+    assert len(settlements) == settlement_residents * DAYS_PER_SEASON
     assert Counter(row["tick"] for row in settlements) == Counter(
-        {day * TICKS_PER_DAY + 48: 12 for day in range(DAYS_PER_SEASON)}
+        {day * TICKS_PER_DAY + 48: settlement_residents for day in range(DAYS_PER_SEASON)}
     )
     assert all(row["balance"] == 0 for row in settlements)
     assert len({row["external_key"] for row in settlements}) == len(settlements)

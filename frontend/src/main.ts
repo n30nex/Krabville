@@ -264,6 +264,7 @@ const shortModel = (model: string): string =>
   model.replace("gpt-", "GPT ").replace("-codex", " Codex").replaceAll("-", " ");
 
 let state: KrabvilleState | null = null;
+let initialRouteApplied = false;
 let selectedSlug: string | null = null;
 let storyTab = "ledger";
 let storyMarkup = "";
@@ -313,9 +314,9 @@ function renderRoster(value: KrabvilleState): void {
   list.innerHTML = value.residents
     .map(
       (resident) => `
-      <button class="resident-row ${selectedSlug === resident.slug ? "selected" : ""}" data-resident="${h(resident.slug)}">
+      <button class="resident-row ${selectedSlug === resident.slug ? "selected" : ""}" data-resident="${h(resident.slug)}" data-life-stage="${h(resident.lifeStage ?? "adult")}">
         <span class="resident-dot" style="--resident-color:${h(resident.color)}"></span>
-        <span><b>${h(resident.name)}</b><small>${h(resident.activity)}</small></span>
+        <span><b>${h(resident.name)}</b><small>${h(resident.activity)}${resident.care?.caregiver ? ` | ${h(resident.care.caregiver)}` : ""}</small></span>
         <i class="activity-beat" aria-hidden="true"></i>
       </button>`,
     )
@@ -356,6 +357,7 @@ function showResidentPeek(resident: Resident | null, x = 0, y = 0): void {
   if (peek.dataset.updateKey !== updateKey) {
     peek.innerHTML = `
       <div class="peek-head"><span style="--resident-color:${h(resident.color)}"></span><div><b>${h(resident.name)}</b><small>${h(resident.activity)}</small></div><em>${h(resident.mood)}</em></div>
+      ${resident.care?.caregiver ? `<div class="peek-care"><span>${h(resident.care.state.replaceAll("_", " "))}</span><b>Caregiver: ${h(resident.care.caregiver)}</b></div>` : ""}
       <div class="peek-needs">${displayedNeeds(resident).sort((left, right) => left[1] - right[1]).slice(0, 6).map(([label, need]) => compactNeedBar(label, need)).join("")}</div>
       ${forecast ? `<div class="peek-forecast"><span>Pondering | ${h(forecast.confidence)}</span><b>${h(resident.pondering?.thought || resident.publicThought || `Maybe ${forecast.activity} next.`)}</b><small>${h(forecast.destination)} | ${h(forecast.reason)}</small></div>` : ""}`;
     peek.dataset.updateKey = updateKey;
@@ -629,7 +631,9 @@ function renderExplorer(section: string): string {
   return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town resident net worth</p></div>${sparkline(values)}</div>
     <div class="metric-grid bank-metrics"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article><article><span>Retail goods</span><b>${Math.round(economy?.stockUnits ?? 0)}</b></article><article><span>Barters</span><b>${economy?.barters ?? 0}</b></article></div>
     <div class="section-label"><span>All resident, household, and business accounts</span><b>${accounts.length}</b></div>
-    <div class="bank-ledger">${accounts.map((account) => `<article class="${h(account.ownerKind)}"${account.residentSlug ? ` data-resident="${h(account.residentSlug)}" role="button" tabindex="0"` : ""}><span class="account-mark">${h(account.ownerKind.slice(0, 1).toUpperCase())}</span><div><b>${h(account.owner)}</b><small>${h(account.name)} | ${h(account.type)} | ${h(account.status)}</small></div><em>${formatCad(account.balance)}</em></article>`).join("") || `<div class="empty-state">No financial accounts yet.</div>`}</div>
+    <div class="bank-ledger">${accounts.map((account) => account.residentSlug
+      ? `<button type="button" class="${h(account.ownerKind)}" data-resident="${h(account.residentSlug)}"><span class="account-mark">${h(account.ownerKind.slice(0, 1).toUpperCase())}</span><span><b>${h(account.owner)}</b><small>${h(account.name)} | ${h(account.type)} | ${h(account.status)}</small></span><em>${formatCad(account.balance)}</em></button>`
+      : `<article class="${h(account.ownerKind)}"><span class="account-mark">${h(account.ownerKind.slice(0, 1).toUpperCase())}</span><div><b>${h(account.owner)}</b><small>${h(account.name)} | ${h(account.type)} | ${h(account.status)}</small></div><em>${formatCad(account.balance)}</em></article>`).join("") || `<div class="empty-state">No financial accounts yet.</div>`}</div>
     <div class="section-label"><span>Recent transactions</span><b>${economy?.transactions?.length ?? 0}</b></div>${renderLedgerEntries((economy?.transactions ?? []).map((entry) => ({ ...entry, title: entry.description })), "No posted transactions yet.")}`;
 }
 
@@ -642,6 +646,7 @@ async function openExplorer(section: string, pushHistory = true): Promise<void> 
   byId("explore-title").textContent = titles[section] ?? "Explore";
   const content = byId("explore-content");
   content.innerHTML = renderExplorer(section);
+  document.querySelectorAll<HTMLButtonElement>("[data-explore]").forEach((button) => button.classList.toggle("active", button.dataset.explore === section));
   if (pushHistory) history.pushState(null, "", `#/explore/${section}`);
 }
 
@@ -670,7 +675,16 @@ async function openProperty(slug: string, pushHistory = true): Promise<void> {
 
 function closeExplorer(clearHash = true): void {
   byId<HTMLElement>("explore-view").hidden = true;
+  document.querySelectorAll<HTMLButtonElement>("[data-explore]").forEach((button) => button.classList.remove("active"));
   if (clearHash && location.hash.startsWith("#/")) history.replaceState(null, "", location.pathname + location.search);
+}
+
+function applyHashRoute(): void {
+  const exploreMatch = location.hash.match(/^#\/explore\/([a-z-]+)$/);
+  const propertyMatch = location.hash.match(/^#\/property\/([^/]+)$/);
+  if (exploreMatch) void openExplorer(exploreMatch[1]!, false);
+  else if (propertyMatch) void openProperty(decodeURIComponent(propertyMatch[1]!), false);
+  else closeExplorer(false);
 }
 
 function render(value: KrabvilleState): void {
@@ -695,6 +709,10 @@ async function refresh(): Promise<void> {
   refreshPending = (async () => {
     try {
       render(await fetchState());
+      if (!initialRouteApplied) {
+        initialRouteApplied = true;
+        applyHashRoute();
+      }
     } catch (error) {
       const live = byId("live-state");
       live.className = "live-state offline";
@@ -931,7 +949,7 @@ byId("explore-content").addEventListener("click", (event) => {
   const button = event.target.closest<HTMLButtonElement>("button");
   if (!button) return;
   if (button.dataset.resident) {
-    closeExplorer(false);
+    closeExplorer();
     void openResident(button.dataset.resident);
   } else if (button.dataset.property) {
     void openProperty(button.dataset.property);
@@ -975,11 +993,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("popstate", () => {
-  const exploreMatch = location.hash.match(/^#\/explore\/([a-z-]+)$/);
-  const propertyMatch = location.hash.match(/^#\/property\/([^/]+)$/);
-  if (exploreMatch) void openExplorer(exploreMatch[1]!, false);
-  else if (propertyMatch) void openProperty(decodeURIComponent(propertyMatch[1]!), false);
-  else closeExplorer(false);
+  applyHashRoute();
 });
 
 connectEvents((type, payload) => {
