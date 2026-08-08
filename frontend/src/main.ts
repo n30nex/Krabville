@@ -513,31 +513,6 @@ function renderStory(value: KrabvilleState): void {
     seasons: () => renderSeasons(value),
   };
   content.innerHTML = (views[storyTab] ?? views.ledger!)();
-  for (const button of content.querySelectorAll<HTMLButtonElement>("[data-resident]")) {
-    button.addEventListener("click", () => void openResident(button.dataset.resident ?? ""));
-  }
-  for (const button of content.querySelectorAll<HTMLButtonElement>("[data-choice]")) {
-    button.addEventListener("click", async () => {
-      if (!value.poll) return;
-      button.disabled = true;
-      try {
-        await vote(value.poll.id, button.dataset.choice ?? "");
-        setTicker("vote", { title: "Your vote is in. You can change it until the poll closes." });
-        await refresh();
-      } catch (error) {
-        setTicker("alert", { title: error instanceof Error ? error.message : "Vote failed" });
-        button.disabled = false;
-      }
-    });
-  }
-  for (const button of content.querySelectorAll<HTMLButtonElement>("[data-place]")) {
-    button.addEventListener("click", () => {
-      world?.focus(button.dataset.place ?? "");
-      showInterior(button.dataset.place ?? "Building");
-      byId("story-rail").classList.remove("open");
-    });
-  }
-  content.querySelector<HTMLButtonElement>("[data-open-archive]")?.addEventListener("click", () => void openArchive());
 }
 
 function render(value: KrabvilleState): void {
@@ -745,6 +720,36 @@ for (const button of document.querySelectorAll<HTMLButtonElement>("[data-story-t
     if (state) renderStory(state);
   });
 }
+
+byId("story-content").addEventListener("click", async (event) => {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest<HTMLButtonElement>("button");
+  if (!button) return;
+  if (button.dataset.resident !== undefined) {
+    void openResident(button.dataset.resident);
+    return;
+  }
+  if (button.dataset.choice !== undefined) {
+    if (!state?.poll) return;
+    button.disabled = true;
+    try {
+      await vote(state.poll.id, button.dataset.choice);
+      setTicker("vote", { title: "Your vote is in. You can change it until the poll closes." });
+      await refresh();
+    } catch (error) {
+      setTicker("alert", { title: error instanceof Error ? error.message : "Vote failed" });
+      button.disabled = false;
+    }
+    return;
+  }
+  if (button.dataset.place !== undefined) {
+    world?.focus(button.dataset.place);
+    showInterior(button.dataset.place || "Building");
+    byId("story-rail").classList.remove("open");
+    return;
+  }
+  if (button.hasAttribute("data-open-archive")) void openArchive();
+});
 
 byId("zoom-in").addEventListener("click", () => world?.zoomIn());
 byId("zoom-out").addEventListener("click", () => world?.zoomOut());

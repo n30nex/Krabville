@@ -77,6 +77,7 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   await page.locator('[data-story-tab="property"]').click();
   await expect(page.locator(".place-card").first()).toBeVisible();
   await expect(page.locator(".place-card button").first()).toContainText(/focus/i);
+  if (testInfo.project.name === "1024x600") await page.waitForTimeout(5_250);
   await page.locator(".place-card button").first().click();
   await expect(page.locator("#interior-view")).toBeVisible();
   await expect(world).toHaveAttribute("data-focused-location", /.+/);
