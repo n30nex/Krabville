@@ -1583,7 +1583,9 @@ def diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
         "database": quick,
         "season": season_status,
         "jobs": jobs,
-        "residents": int(connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0]),
+        "residents": int(
+            connection.execute("SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1").fetchone()[0]
+        ),
         "majorEvents": len(MAJOR_EVENTS),
         "microEvents": len(MICRO_EVENTS),
     }

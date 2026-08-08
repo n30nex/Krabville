@@ -78,6 +78,10 @@ def migrate(connection: sqlite3.Connection) -> None:
 
 
 def seed_residents(connection: sqlite3.Connection) -> None:
+    if connection.execute(
+        "SELECT 1 FROM resident_identities WHERE generation_seed LIKE 'v2:%' LIMIT 1"
+    ).fetchone():
+        return
     created = now_iso()
     for profile in RESIDENTS:
         connection.execute(
