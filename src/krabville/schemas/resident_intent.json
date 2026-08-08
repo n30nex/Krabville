@@ -11,7 +11,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["slug", "intention", "publicThought"],
+        "required": ["slug", "intention", "reflection", "publicThought"],
         "properties": {
           "slug": {"type": "string", "maxLength": 80},
           "intention": {"type": "string", "maxLength": 240},
@@ -22,4 +22,3 @@
     }
   }
 }
-
