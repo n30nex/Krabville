@@ -1,0 +1,10 @@
+[Unit]
+Description=Krabville loopback listener on port %i
+
+[Socket]
+ListenStream=127.0.0.1:%i
+NoDelay=true
+Service=krabville-proxy@%i.service
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,132 @@
+name: krabville
+
+x-runtime: &runtime
+  image: krabville:2.0.0-alpha.1
+  build:
+    context: .
+  user: "1000:1000"
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=96m,mode=1777
+  volumes:
+    - type: bind
+      source: ${KRABVILLE_DATA_HOST:-/opt/canadaverse/krabville-v2/data}
+      target: /data
+  environment: &environment
+    KRABVILLE_DATA_DIR: /data
+    KRABVILLE_DATABASE: /data/krabville.db
+    KRABVILLE_REPORT_DIR: /data/reports
+    KRABVILLE_FRONTEND_DIR: /app/frontend/dist
+    KRABVILLE_ASSET_DIR: /app/frontend/dist/assets
+    KRABVILLE_CONTROL_SOCKET: /data/control.sock
+    KRABVILLE_PRIMARY_MODEL: ${KRABVILLE_PRIMARY_MODEL:-gpt-5.3-codex-spark}
+    KRABVILLE_FALLBACK_MODEL: ${KRABVILLE_FALLBACK_MODEL:-gpt-5.6-luna}
+    KRABVILLE_CALL_LIMIT: ${KRABVILLE_CALL_LIMIT:-150}
+    KRABVILLE_TOKEN_GUARD: ${KRABVILLE_TOKEN_GUARD:-500000}
+    KRABVILLE_INFERENCE_TIMEOUT: ${KRABVILLE_INFERENCE_TIMEOUT:-180}
+    KRABVILLE_PUBLIC_ORIGIN: https://krab.canadaverse.org
+  logging:
+    driver: json-file
+    options:
+      max-size: 5m
+      max-file: "2"
+  networks: [simulation]
+
+services:
+  web:
+    <<: *runtime
+    command: [krabville-api]
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.60
+    environment:
+      <<: *environment
+      KRABVILLE_BIND: 0.0.0.0
+      KRABVILLE_PORT: 18889
+      KRABVILLE_VOTER_SECRET_FILE: /run/secrets/voter-secret
+    secrets: [voter-secret]
+    networks:
+      simulation:
+        ipv4_address: 172.28.89.10
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18889/healthz', timeout=2).read()"]
+      interval: 15s
+      timeout: 4s
+      retries: 4
+      start_period: 15s
+
+  engine:
+    <<: *runtime
+    command: [krabville-engine]
+    restart: unless-stopped
+    mem_limit: 384m
+    cpus: 0.80
+    environment:
+      <<: *environment
+      KRABVILLE_CONTROL_SOCKET: /control/control.sock
+      KRABVILLE_TICK_SECONDS: ${KRABVILLE_TICK_SECONDS:-12.5}
+    volumes:
+      - type: bind
+        source: ${KRABVILLE_DATA_HOST:-/opt/canadaverse/krabville-v2/data}
+        target: /data
+      - type: bind
+        source: /run/canadaverse-control/krabville
+        target: /control
+    networks:
+      simulation:
+        ipv4_address: 172.28.89.11
+    healthcheck:
+      test: [CMD, python, -c, "import sqlite3,sys; c=sqlite3.connect('/data/krabville.db'); sys.exit(c.execute('PRAGMA quick_check').fetchone()[0] != 'ok')"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  inference:
+    <<: *runtime
+    profiles: [inference]
+    command: [krabville-inference-entrypoint]
+    restart: on-failure:3
+    mem_limit: 1024m
+    cpus: 1.50
+    pids_limit: 192
+    environment:
+      <<: *environment
+      KRABVILLE_FAKE_PROVIDER: ${KRABVILLE_FAKE_PROVIDER:-true}
+      KRABVILLE_CODEX_BIN: /usr/local/bin/codex
+      CODEX_HOME: /tmp/codex-home
+    volumes:
+      - type: bind
+        source: ${KRABVILLE_DATA_HOST:-/opt/canadaverse/krabville-v2/data}
+        target: /data
+      - type: bind
+        source: ${KRABVILLE_CODEX_BIN_HOST:-/home/neonx/.codex/packages/standalone/releases/0.144.6-aarch64-unknown-linux-musl/bin/codex}
+        target: /usr/local/bin/codex
+        read_only: true
+      - type: bind
+        source: ${KRABVILLE_CODEX_AUTH_HOST:-/home/neonx/.codex/auth.json}
+        target: /run/secrets/codex-auth.json
+        read_only: true
+    networks:
+      simulation:
+        ipv4_address: 172.28.89.12
+      inference-egress: {}
+    depends_on:
+      engine:
+        condition: service_healthy
+
+networks:
+  simulation:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.89.0/24
+  inference-egress: {}
+
+secrets:
+  voter-secret:
+    file: ${KRABVILLE_VOTER_SECRET_HOST:-./deploy/secrets/voter-secret}

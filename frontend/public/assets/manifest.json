@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "name": "krabville-map.webp",
+      "bytes": 740792,
+      "sha256": "9fc7f67ba4b2a37e224831e2c4a5d0b66375575493c403735bbb8f3bda38bd6b"
+    },
+    {
+      "name": "residents-a.png",
+      "bytes": 902356,
+      "sha256": "00b7424ee4b738134f7af8c0e2301142af233674cf63df2f51e894d7f09cb08b"
+    },
+    {
+      "name": "residents-b.png",
+      "bytes": 1004528,
+      "sha256": "e2df4ed960837cef5c3af52fbd30cf69476d77e064867bbd14c9583b2aae192c"
+    },
+    {
+      "name": "season-001.png",
+      "bytes": 2321188,
+      "sha256": "259111ff2bccf20c4a46566dc6fe08c8d064dd4d0ee0c66bda6a1cff57205bab"
+    }
+  ]
+}

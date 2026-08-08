@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "krabville"
+version = "2.0.0a1"
+description = "A persistent social simulation for Canadaverse"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi==0.141.1",
+  "pillow==12.3.0",
+  "uvicorn==0.52.1",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx==0.28.1",
+  "pytest==9.1.1",
+  "pytest-cov==7.0.0",
+]
+
+[project.scripts]
+krabville-api = "krabville.api:main"
+krabville-engine = "krabville.engine:main"
+krabville-inference = "krabville.inference:main"
+krabville-manage = "krabville.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/krabville"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]

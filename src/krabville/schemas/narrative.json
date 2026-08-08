@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["headline", "publicNote"],
+  "properties": {
+    "headline": {"type": "string", "maxLength": 180},
+    "publicNote": {"type": "string", "maxLength": 360}
+  }
+}
+

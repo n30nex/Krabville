@@ -1,0 +1,13 @@
+[Unit]
+Description=Krabville loopback proxy on port %i
+After=docker.service krabville-compose.service
+Requires=krabville-proxy@%i.socket
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 172.28.89.10:18889
+DynamicUser=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+NoNewPrivileges=yes

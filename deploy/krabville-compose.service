@@ -1,0 +1,20 @@
+[Unit]
+Description=Krabville deterministic simulation
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=neonx
+Group=docker
+WorkingDirectory=/opt/canadaverse/krabville-v2
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /opt/canadaverse/krabville-v2/deploy/krabville-control.conf
+ExecStart=/usr/bin/docker compose --env-file deploy/.env --profile inference up -d web engine inference
+ExecStop=/usr/bin/docker compose --env-file deploy/.env stop
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

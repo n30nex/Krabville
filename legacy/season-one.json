@@ -1,0 +1,522 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "status": "stopped",
+    "day": 7,
+    "residents": 12
+  },
+  "residents": [
+    {
+      "name": "Latoya Williams",
+      "action": "creative free time (on the way to creative free tim)",
+      "mood": "\ud83c\udf7d",
+      "thought": "this is blank",
+      "role": "Digital photographer",
+      "home": "Artists' house",
+      "workplace": "Photo studio",
+      "routine": "Photography, editing, travel stories, and town life",
+      "about": "An organized artist with a sharp eye for small details."
+    },
+    {
+      "name": "Rajiv Patel",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Painter and guitarist",
+      "home": "Artists' house",
+      "workplace": "Painting studio",
+      "routine": "Painting, gallery preparation, guitar, and quiet walks",
+      "about": "A thoughtful painter preparing for his first solo show."
+    },
+    {
+      "name": "Abigail Chen",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Digital artist",
+      "home": "Artists' house",
+      "workplace": "Animation lab",
+      "routine": "Animation, interactive experiments, meals, and collaboration",
+      "about": "An animator exploring where art, technology, and play meet."
+    },
+    {
+      "name": "Francisco Lopez",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Actor and comedian",
+      "home": "Artists' house",
+      "workplace": "Theatre workshop",
+      "routine": "Filming, improv, writing, rehearsals, and social time",
+      "about": "A natural entertainer turning daily town life into stories."
+    },
+    {
+      "name": "Hailey Johnson",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Writer and podcaster",
+      "home": "Artists' house",
+      "workplace": "Writing loft",
+      "routine": "Writing, interviews, reading, meals, and town conversations",
+      "about": "A storyteller developing a novel and a new local podcast."
+    },
+    {
+      "name": "Ryan Park",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Software engineer",
+      "home": "Harbour apartment",
+      "workplace": "Radio engineering shack",
+      "routine": "Building, debugging, research, errands, and evening downtime",
+      "about": "A practical problem-solver who keeps Krabville's systems useful."
+    },
+    {
+      "name": "Giorgio Rossi",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Mathematician",
+      "home": "Observatory cottage",
+      "workplace": "Lagoon observatory",
+      "routine": "Research, teaching, pattern hunting, meals, and long walks",
+      "about": "A mathematician fascinated by patterns in nature and the sky."
+    },
+    {
+      "name": "Carlos Gomez",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Poet",
+      "home": "Garden apartment",
+      "workplace": "Library and park",
+      "routine": "Writing, workshops, reading, nature walks, and reflection",
+      "about": "A poet collecting strange and beautiful details from the Lagoon."
+    },
+    {
+      "name": "Ayesha Khan",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Literature student",
+      "home": "Oak Hill dorm",
+      "workplace": "College library",
+      "routine": "Classes, thesis research, meals, friends, and reading",
+      "about": "A determined student researching language and dramatic literature."
+    },
+    {
+      "name": "Wolfgang Schulz",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Chemistry student athlete",
+      "home": "Oak Hill dorm",
+      "workplace": "College and training field",
+      "routine": "Running, chemistry, study, training, meals, and recovery",
+      "about": "A disciplined student balancing experiments and competition."
+    },
+    {
+      "name": "Mei Lin",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Philosophy professor",
+      "home": "Lin family home",
+      "workplace": "Oak Hill College",
+      "routine": "Teaching, research, family meals, mentoring, and rest",
+      "about": "A professor and parent who helps other people reach their goals."
+    },
+    {
+      "name": "Tom Moreno",
+      "action": "sleeping",
+      "mood": "\ud83d\udca4",
+      "thought": "this is blank",
+      "role": "Market keeper",
+      "home": "Moreno family home",
+      "workplace": "Willow Market",
+      "routine": "Opening the market, serving neighbours, supper, and town news",
+      "about": "A friendly shopkeeper who knows what the town needs each day."
+    }
+  ],
+  "world": {
+    "weather": {
+      "condition": "rain",
+      "temperature_c": 24,
+      "wind_kmh": 13,
+      "season": "summer"
+    },
+    "days": [
+      {
+        "year": 1,
+        "day": 0,
+        "date": "2026-08-08",
+        "weather": {
+          "condition": "cloudy",
+          "temperature_c": 22,
+          "wind_kmh": 11,
+          "season": "summer"
+        },
+        "narrative": "Day 0 was cloudy and 22 C. A misunderstanding at Hobbs Cafe leaves Giorgio Rossi and Rajiv Patel needing to clear the air. By evening, Giorgio Rossi and Rajiv Patel were acquainted after 1 shared event. The town recorded 100 activity changes and 3 conversations. One late note followed Ryan Park free time.",
+        "activity_changes": 100,
+        "conversations": 3,
+        "event": {
+          "year": 1,
+          "day": 0,
+          "date": "2026-08-08",
+          "title": "Cafe mix-up",
+          "summary": "A misunderstanding at Hobbs Cafe leaves Giorgio Rossi and Rajiv Patel needing to clear the air.",
+          "participants": [
+            "Giorgio Rossi",
+            "Rajiv Patel"
+          ],
+          "relationship_change": -2,
+          "strange": false
+        }
+      },
+      {
+        "year": 1,
+        "day": 1,
+        "date": "2026-08-09",
+        "weather": {
+          "condition": "cloudy",
+          "temperature_c": 28,
+          "wind_kmh": 18,
+          "season": "summer"
+        },
+        "narrative": "Day 1 was cloudy and 28 C. A second moon appears beneath the Lagoon surface, and Mei Lin asks Giorgio Rossi to keep watch with them. By evening, Giorgio Rossi and Mei Lin were friendly after 1 shared event. The town recorded 103 activity changes and 2 conversations. One late note followed Wolfgang Schulz sleeping.",
+        "activity_changes": 103,
+        "conversations": 2,
+        "event": {
+          "year": 1,
+          "day": 1,
+          "date": "2026-08-09",
+          "title": "Moon in the water",
+          "summary": "A second moon appears beneath the Lagoon surface, and Mei Lin asks Giorgio Rossi to keep watch with them.",
+          "participants": [
+            "Mei Lin",
+            "Giorgio Rossi"
+          ],
+          "relationship_change": 3,
+          "strange": true
+        }
+      },
+      {
+        "year": 1,
+        "day": 2,
+        "date": "2026-08-10",
+        "weather": {
+          "condition": "clear",
+          "temperature_c": 21,
+          "wind_kmh": 19,
+          "season": "summer"
+        },
+        "narrative": "Day 2 was clear and 21 C. Francisco Lopez invites Hailey Johnson to an improvised concert by the marina. By evening, Francisco Lopez and Hailey Johnson were friendly after 1 shared event. The town recorded 103 activity changes and 1 conversations. One late note followed Tom Moreno sleeping.",
+        "activity_changes": 103,
+        "conversations": 1,
+        "event": {
+          "year": 1,
+          "day": 2,
+          "date": "2026-08-10",
+          "title": "Dockside concert",
+          "summary": "Francisco Lopez invites Hailey Johnson to an improvised concert by the marina.",
+          "participants": [
+            "Francisco Lopez",
+            "Hailey Johnson"
+          ],
+          "relationship_change": 3,
+          "strange": false
+        }
+      },
+      {
+        "year": 1,
+        "day": 3,
+        "date": "2026-08-11",
+        "weather": {
+          "condition": "cloudy",
+          "temperature_c": 23,
+          "wind_kmh": 7,
+          "season": "summer"
+        },
+        "narrative": "Day 3 was cloudy and 23 C. A second moon appears beneath the Lagoon surface, and Hailey Johnson asks Ayesha Khan to keep watch with them. By evening, Ayesha Khan and Hailey Johnson were friendly after 1 shared event. The town recorded 102 activity changes and 1 conversations. One late note followed Tom Moreno sleeping.",
+        "activity_changes": 102,
+        "conversations": 1,
+        "event": {
+          "year": 1,
+          "day": 3,
+          "date": "2026-08-11",
+          "title": "Moon in the water",
+          "summary": "A second moon appears beneath the Lagoon surface, and Hailey Johnson asks Ayesha Khan to keep watch with them.",
+          "participants": [
+            "Hailey Johnson",
+            "Ayesha Khan"
+          ],
+          "relationship_change": 3,
+          "strange": true
+        }
+      },
+      {
+        "year": 1,
+        "day": 4,
+        "date": "2026-08-12",
+        "weather": {
+          "condition": "clear",
+          "temperature_c": 26,
+          "wind_kmh": 19,
+          "season": "summer"
+        },
+        "narrative": "Day 4 was clear and 26 C. Residents wake remembering the same impossible lighthouse; Francisco Lopez and Mei Lin decide what it means. By evening, Francisco Lopez and Mei Lin were acquainted after 1 shared event. The town recorded 99 activity changes and 2 conversations. One late note followed Tom Moreno sleeping.",
+        "activity_changes": 99,
+        "conversations": 2,
+        "event": {
+          "year": 1,
+          "day": 4,
+          "date": "2026-08-12",
+          "title": "Townwide shared dream",
+          "summary": "Residents wake remembering the same impossible lighthouse; Francisco Lopez and Mei Lin decide what it means.",
+          "participants": [
+            "Francisco Lopez",
+            "Mei Lin"
+          ],
+          "relationship_change": 2,
+          "strange": true
+        }
+      },
+      {
+        "year": 1,
+        "day": 5,
+        "date": "2026-08-13",
+        "weather": {
+          "condition": "storm",
+          "temperature_c": 26,
+          "wind_kmh": 7,
+          "season": "summer"
+        },
+        "narrative": "Day 5 was storm and 26 C. A power flicker changes Giorgio Rossi and Latoya Williams's evening plans across the Lagoon. By evening, Giorgio Rossi and Latoya Williams were acquainted after 1 shared event. The town recorded 103 activity changes and 1 conversations. One late note followed Tom Moreno sleeping.",
+        "activity_changes": 103,
+        "conversations": 1,
+        "event": {
+          "year": 1,
+          "day": 5,
+          "date": "2026-08-13",
+          "title": "Power flicker",
+          "summary": "A power flicker changes Giorgio Rossi and Latoya Williams's evening plans across the Lagoon.",
+          "participants": [
+            "Giorgio Rossi",
+            "Latoya Williams"
+          ],
+          "relationship_change": 1,
+          "strange": false
+        }
+      },
+      {
+        "year": 1,
+        "day": 6,
+        "date": "2026-08-14",
+        "weather": {
+          "condition": "rain",
+          "temperature_c": 24,
+          "wind_kmh": 13,
+          "season": "summer"
+        },
+        "narrative": "Day 6 was rain and 24 C. A perfectly crab-shaped cloud drops one dry brass key between Francisco Lopez and Wolfgang Schulz. By evening, Francisco Lopez and Wolfgang Schulz were acquainted after 1 shared event. The town recorded 103 activity changes and 1 conversations. One late note followed Tom Moreno sleeping.",
+        "activity_changes": 103,
+        "conversations": 1,
+        "event": {
+          "year": 1,
+          "day": 6,
+          "date": "2026-08-14",
+          "title": "Crab-shaped cloud",
+          "summary": "A perfectly crab-shaped cloud drops one dry brass key between Francisco Lopez and Wolfgang Schulz.",
+          "participants": [
+            "Francisco Lopez",
+            "Wolfgang Schulz"
+          ],
+          "relationship_change": 2,
+          "strange": true
+        }
+      }
+    ],
+    "relationships": [
+      {
+        "a": "Giorgio Rossi",
+        "b": "Rajiv Patel",
+        "score": -2,
+        "interactions": 1,
+        "label": "acquainted",
+        "last_event": "Cafe mix-up"
+      },
+      {
+        "a": "Giorgio Rossi",
+        "b": "Mei Lin",
+        "score": 3,
+        "interactions": 1,
+        "label": "friendly",
+        "last_event": "Moon in the water"
+      },
+      {
+        "a": "Francisco Lopez",
+        "b": "Hailey Johnson",
+        "score": 3,
+        "interactions": 1,
+        "label": "friendly",
+        "last_event": "Dockside concert"
+      },
+      {
+        "a": "Ayesha Khan",
+        "b": "Hailey Johnson",
+        "score": 3,
+        "interactions": 1,
+        "label": "friendly",
+        "last_event": "Moon in the water"
+      },
+      {
+        "a": "Francisco Lopez",
+        "b": "Mei Lin",
+        "score": 2,
+        "interactions": 1,
+        "label": "acquainted",
+        "last_event": "Townwide shared dream"
+      },
+      {
+        "a": "Giorgio Rossi",
+        "b": "Latoya Williams",
+        "score": 1,
+        "interactions": 1,
+        "label": "acquainted",
+        "last_event": "Power flicker"
+      },
+      {
+        "a": "Francisco Lopez",
+        "b": "Wolfgang Schulz",
+        "score": 2,
+        "interactions": 1,
+        "label": "acquainted",
+        "last_event": "Crab-shaped cloud"
+      }
+    ],
+    "week_report": {
+      "status": "complete",
+      "title": "Krabville Week One",
+      "days_completed": 7,
+      "start_date": "2026-08-08",
+      "end_date": "2026-08-14",
+      "headline": "Two moons, one shared dream, and a brass key",
+      "narrative": "Krabville's first week mixed ordinary Lagoon life with impossible skies. Residents worked, ate, talked, weathered a storm, watched two reflected moons, shared one lighthouse dream, and ended the week puzzling over a dry brass key.",
+      "strange_days": 4,
+      "activity_changes": 713,
+      "conversations": 11,
+      "relationships": 7,
+      "strongest_bond": {
+        "a": "Giorgio Rossi",
+        "b": "Mei Lin",
+        "score": 3,
+        "interactions": 1,
+        "label": "friendly",
+        "last_event": "Moon in the water"
+      },
+      "events": [
+        {
+          "year": 1,
+          "day": 0,
+          "date": "2026-08-08",
+          "title": "Cafe mix-up",
+          "summary": "A misunderstanding at Hobbs Cafe leaves Giorgio Rossi and Rajiv Patel needing to clear the air.",
+          "participants": [
+            "Giorgio Rossi",
+            "Rajiv Patel"
+          ],
+          "relationship_change": -2,
+          "strange": false
+        },
+        {
+          "year": 1,
+          "day": 1,
+          "date": "2026-08-09",
+          "title": "Moon in the water",
+          "summary": "A second moon appears beneath the Lagoon surface, and Mei Lin asks Giorgio Rossi to keep watch with them.",
+          "participants": [
+            "Mei Lin",
+            "Giorgio Rossi"
+          ],
+          "relationship_change": 3,
+          "strange": true
+        },
+        {
+          "year": 1,
+          "day": 2,
+          "date": "2026-08-10",
+          "title": "Dockside concert",
+          "summary": "Francisco Lopez invites Hailey Johnson to an improvised concert by the marina.",
+          "participants": [
+            "Francisco Lopez",
+            "Hailey Johnson"
+          ],
+          "relationship_change": 3,
+          "strange": false
+        },
+        {
+          "year": 1,
+          "day": 3,
+          "date": "2026-08-11",
+          "title": "Moon in the water",
+          "summary": "A second moon appears beneath the Lagoon surface, and Hailey Johnson asks Ayesha Khan to keep watch with them.",
+          "participants": [
+            "Hailey Johnson",
+            "Ayesha Khan"
+          ],
+          "relationship_change": 3,
+          "strange": true
+        },
+        {
+          "year": 1,
+          "day": 4,
+          "date": "2026-08-12",
+          "title": "Townwide shared dream",
+          "summary": "Residents wake remembering the same impossible lighthouse; Francisco Lopez and Mei Lin decide what it means.",
+          "participants": [
+            "Francisco Lopez",
+            "Mei Lin"
+          ],
+          "relationship_change": 2,
+          "strange": true
+        },
+        {
+          "year": 1,
+          "day": 5,
+          "date": "2026-08-13",
+          "title": "Power flicker",
+          "summary": "A power flicker changes Giorgio Rossi and Latoya Williams's evening plans across the Lagoon.",
+          "participants": [
+            "Giorgio Rossi",
+            "Latoya Williams"
+          ],
+          "relationship_change": 1,
+          "strange": false
+        },
+        {
+          "year": 1,
+          "day": 6,
+          "date": "2026-08-14",
+          "title": "Crab-shaped cloud",
+          "summary": "A perfectly crab-shaped cloud drops one dry brass key between Francisco Lopez and Wolfgang Schulz.",
+          "participants": [
+            "Francisco Lopez",
+            "Wolfgang Schulz"
+          ],
+          "relationship_change": 2,
+          "strange": true
+        }
+      ],
+      "weather_days": {
+        "cloudy": 3,
+        "clear": 2,
+        "storm": 1,
+        "rain": 1
+      },
+      "model": "gpt-5.3-codex-spark",
+      "model_calls": 600,
+      "model_calls_locked": true
+    }
+  }
+}
