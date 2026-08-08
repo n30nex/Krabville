@@ -2,11 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "narrative", "statistics"],
+  "required": ["title", "narrative"],
   "properties": {
     "title": {"type": "string", "maxLength": 160},
-    "narrative": {"type": "string", "maxLength": 1200},
-    "statistics": {"type": "object"}
+    "narrative": {"type": "string", "maxLength": 1200}
   }
 }
-

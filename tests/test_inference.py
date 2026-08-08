@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from krabville.db import initialize
 from pathlib import Path
 
@@ -23,6 +25,28 @@ class FallbackProvider:
 class AlwaysFailProvider:
     def complete(self, job, model, reasoning):
         raise RuntimeError("simulated interrupted request")
+
+
+def test_all_provider_schemas_are_strict_objects() -> None:
+    schema_dir = Path(__file__).parents[1] / "src" / "krabville" / "schemas"
+
+    def assert_strict(node: object, path: Path) -> None:
+        if isinstance(node, list):
+            for child in node:
+                assert_strict(child, path)
+            return
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object":
+            properties = node.get("properties")
+            assert isinstance(properties, dict), path
+            assert node.get("additionalProperties") is False, path
+            assert set(node.get("required", [])) == set(properties), path
+        for child in node.values():
+            assert_strict(child, path)
+
+    for path in sorted(schema_dir.glob("*.json")):
+        assert_strict(json.loads(path.read_text(encoding="utf-8")), path)
 
 
 def test_spark_failure_falls_back_once_to_luna(settings_factory) -> None:

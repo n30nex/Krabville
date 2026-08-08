@@ -28,6 +28,10 @@ class SeasonLocked(RuntimeError):
     pass
 
 
+class ProviderProcessError(RuntimeError):
+    pass
+
+
 def _public(value: Any, maximum: int) -> str:
     return validate_public_text(value, maximum)
 
@@ -235,7 +239,7 @@ class CodexProvider:
                     time.sleep(0.5)
             _assert_no_tool_events(stdout_path)
             if process.returncode:
-                raise RuntimeError(f"Codex exited with status {process.returncode}")
+                raise ProviderProcessError(f"Codex exited with status {process.returncode}")
             value = json.loads(output_path.read_text(encoding="utf-8"))
             usage = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0, "total_tokens": 0}
             for line in stdout_path.read_text(encoding="utf-8", errors="replace").splitlines():
