@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from krabville.inference import FakeProvider, _assert_no_tool_events, _validate, process_one, run_worker
+from krabville.inference import (
+    CodexProvider,
+    FakeProvider,
+    _assert_no_tool_events,
+    _validate,
+    process_one,
+    run_worker,
+)
 from krabville.world import _queue_job, start_season, stop_now
 
 
@@ -25,6 +32,17 @@ class FallbackProvider:
 class AlwaysFailProvider:
     def complete(self, job, model, reasoning):
         raise RuntimeError("simulated interrupted request")
+
+
+def test_codex_prompt_uses_the_tv14_story_boundary(settings_factory) -> None:
+    settings = settings_factory()
+    prompt = CodexProvider(settings, settings.database_path)._prompt(
+        {"context_json": json.dumps({"event": "A friendship is under strain."})}
+    )
+    assert "TV-14" in prompt
+    assert "realistic disagreements" in prompt
+    assert "sexualized minors" in prompt
+    assert "family-friendly" not in prompt
 
 
 def test_all_provider_schemas_are_strict_objects() -> None:

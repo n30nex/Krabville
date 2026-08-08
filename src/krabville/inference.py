@@ -171,8 +171,11 @@ class CodexProvider:
         return (
             "Act only as a bounded fiction writer for the Krabville social simulation. "
             "Do not use tools, files, shell commands, network access, or hidden reasoning. "
-            "Return only the JSON object required by the supplied schema. The content is "
-            "fictional, family-friendly, concise, and grounded only in this context:\n" + serialized
+            "Return only the JSON object required by the supplied schema. Keep the fiction "
+            "concise and grounded only in this context. Use a TV-14 tone with realistic "
+            "disagreements, jealousy, rivalry, romance, mistakes, and consequences. Never "
+            "include explicit sexual content, sexual violence, graphic violence, hate content, "
+            "or sexualized minors. Context:\n" + serialized
         )
 
     def _locked(self, season_id: int) -> bool:
