@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from krabville.db import initialize
+from krabville.world import diagnose, start_season
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -88,7 +89,7 @@ def test_kvsim_v2_schema_is_complete_and_enforces_foreign_keys(settings_factory)
     assert connection.execute("SELECT COUNT(*) FROM resident_identities").fetchone()[0] == resident_count
     assert connection.execute("SELECT COUNT(*) FROM resident_lifecycle").fetchone()[0] == resident_count
     assert connection.execute(
-        "SELECT 1 FROM schema_migrations WHERE version=4"
+        "SELECT 1 FROM schema_migrations WHERE version=5"
     ).fetchone()
 
     household_id = connection.execute(
@@ -107,4 +108,22 @@ def test_kvsim_v2_schema_is_complete_and_enforces_foreign_keys(settings_factory)
             (household_id,),
         )
 
+    connection.close()
+
+
+def test_reopening_v2_database_does_not_restore_the_legacy_cast(settings_factory) -> None:
+    settings = settings_factory()
+    connection = initialize(settings)
+    start_season(connection, seed_hex="a5" * 32)
+    assert connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0] == 12
+    connection.close()
+
+    connection = initialize(settings)
+    assert connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0] == 12
+    assert connection.execute("SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1").fetchone()[0] == 12
+    assert connection.execute("SELECT COUNT(*) FROM resident_state").fetchone()[0] == 12
+    assert connection.execute(
+        "SELECT COUNT(*) FROM resident_identities WHERE generation_seed LIKE 'legacy:%'"
+    ).fetchone()[0] == 0
+    assert diagnose(connection)["residents"] == 12
     connection.close()
