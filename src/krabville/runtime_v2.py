@@ -456,6 +456,35 @@ def apply_lifecycle_boundary(connection: sqlite3.Connection, season_id: int, tic
                 "UPDATE residents SET role='student',workplace='Oak Hill College' WHERE id=?",
                 (row["id"],),
             )
+            prior_care = connection.execute(
+                "SELECT id,caregiver_resident_id FROM childcare_arrangements WHERE child_resident_id=? AND status='active' ORDER BY id DESC LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if prior_care:
+                connection.execute(
+                    "UPDATE childcare_arrangements SET status='ended',ended_season_id=?,ended_tick=? WHERE id=?",
+                    (season_id, tick, prior_care["id"]),
+                )
+                school = connection.execute("SELECT id FROM businesses WHERE name='Krabville School'").fetchone()
+                if school:
+                    connection.execute(
+                        """
+                        INSERT INTO childcare_arrangements(
+                          child_resident_id,arrangement_type,provider_business_id,cost_per_day_cents,
+                          status,started_season_id,started_tick
+                        ) VALUES(?,'school',?,4500,'active',?,?)
+                        """,
+                        (row["id"], school[0], season_id, tick),
+                    )
+                caregiver_id = prior_care["caregiver_resident_id"]
+                if caregiver_id and not connection.execute(
+                    """
+                    SELECT 1 FROM childcare_arrangements c JOIN resident_lifecycle l ON l.resident_id=c.child_resident_id
+                    WHERE c.caregiver_resident_id=? AND c.status='active' AND l.alive=1 AND l.current_stage='baby' LIMIT 1
+                    """,
+                    (caregiver_id,),
+                ).fetchone():
+                    connection.execute("UPDATE employment SET status='active' WHERE resident_id=? AND status='leave'", (caregiver_id,))
         elif next_stage == "teen":
             connection.execute(
                 "UPDATE residents SET role='secondary student',workplace='Oak Hill College' WHERE id=?",
@@ -680,6 +709,7 @@ def add_next_generation(
             """,
             (child_id, parent["id"], season_id, tick),
         )
+        connection.execute("UPDATE employment SET status='leave' WHERE resident_id=? AND status='active'", (parent["id"],))
         event_id = int(connection.execute(
             """
             INSERT INTO life_events(

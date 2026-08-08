@@ -1,17 +1,25 @@
-import type { KrabvilleState, ResidentDetail } from "./types";
+import type { KrabvilleState, PropertyDetail, ResidentDetail } from "./types";
 
 async function json<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, { credentials: "same-origin", ...options });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+  const retryable = !options?.method || options.method === "GET";
+  for (let attempt = 0; attempt < (retryable ? 3 : 1); attempt += 1) {
+    const response = await fetch(path, { credentials: "same-origin", ...options });
+    if (response.ok) return response.json() as Promise<T>;
+    if (![502, 503, 504].includes(response.status) || attempt === 2) {
+      throw new Error(response.status >= 500 ? "The town ledger is briefly unavailable." : `${response.status} ${response.statusText}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
   }
-  return response.json() as Promise<T>;
+  throw new Error("The town ledger is briefly unavailable.");
 }
 
 export const fetchState = () => json<KrabvilleState>("/api/v3/state");
 
 export const fetchResident = (slug: string) =>
   json<ResidentDetail>(`/api/v3/residents/${encodeURIComponent(slug)}`);
+
+export const fetchProperty = (slug: string) =>
+  json<PropertyDetail>(`/api/v3/properties/${encodeURIComponent(slug)}`);
 
 export const fetchSeasons = () =>
   json<{ seasons: Array<Record<string, unknown>> }>("/api/v3/seasons");

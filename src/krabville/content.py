@@ -304,6 +304,7 @@ LOCATION_ACCESS = {
     "Hobbs Cafe": "cafe",
     "Lagoon Library": "gear",
     "Lagoon Clinic": "clinic",
+    "Harbour Shelter": "clinic",
     "Radio Shack": "radio",
     "Harbour Office": "harbour",
     "Boatworks": "lotus",

@@ -117,6 +117,9 @@ def initialize(settings: Settings) -> sqlite3.Connection:
     connection = connect(settings.database_path)
     migrate(connection)
     seed_residents(connection)
+    from .commerce_v2 import seed_commerce
+
+    seed_commerce(connection)
     return connection
 
 
