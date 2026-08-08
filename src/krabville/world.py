@@ -618,10 +618,28 @@ def _care_links(
     ):
         stage = str(child["current_stage"])
         if stage == "child" and child["provider_business_id"] and 8 <= hour < 15:
+            provider = connection.execute(
+                """
+                SELECT b.name,COALESCE(p.map_location,p.name,'Krabville School') location
+                FROM businesses b LEFT JOIN properties p ON p.id=b.property_id WHERE b.id=?
+                """,
+                (child["provider_business_id"],),
+            ).fetchone()
             connection.execute(
-                "UPDATE resident_season_state SET care_state='institutional' WHERE season_id=? AND resident_id=?",
-                (season_id, child["id"]),
+                """
+                UPDATE resident_season_state SET care_state='institutional',
+                  current_caregiver_id=NULL,current_care_provider_id=?
+                WHERE season_id=? AND resident_id=?
+                """,
+                (child["provider_business_id"], season_id, child["id"]),
             )
+            if provider:
+                by_child[int(child["id"])] = {
+                    "childId": int(child["id"]), "childName": str(child["name"]),
+                    "stage": stage, "home": str(child["home"]),
+                    "location": str(provider["location"]), "caregiverName": str(provider["name"]),
+                    "institutional": True,
+                }
             continue
         caregiver = None
         if child["caregiver_resident_id"]:
@@ -646,7 +664,11 @@ def _care_links(
             ).fetchone()
         if not caregiver:
             connection.execute(
-                "UPDATE resident_season_state SET care_state='uncovered' WHERE season_id=? AND resident_id=?",
+                """
+                UPDATE resident_season_state SET care_state='uncovered',
+                  current_caregiver_id=NULL,current_care_provider_id=NULL
+                WHERE season_id=? AND resident_id=?
+                """,
                 (season_id, child["id"]),
             )
             continue
@@ -658,19 +680,31 @@ def _care_links(
         link = {
             "childId": int(child["id"]), "childName": str(child["name"]),
             "stage": stage, "home": str(child["home"]),
+            "location": str(child["home"]), "institutional": False,
             "caregiverId": int(caregiver["id"]), "caregiverName": str(caregiver["name"]),
         }
         by_child[int(child["id"])] = link
         by_caregiver[int(caregiver["id"])].append(link)
         connection.execute(
-            "UPDATE resident_season_state SET care_state='covered' WHERE season_id=? AND resident_id=?",
-            (season_id, child["id"]),
+            """
+            UPDATE resident_season_state SET care_state='covered',
+              current_caregiver_id=?,current_care_provider_id=NULL
+            WHERE season_id=? AND resident_id=?
+            """,
+            (caregiver["id"], season_id, child["id"]),
         )
     return by_caregiver, by_child
 
 
 def _care_activity(link: dict[str, Any], needs: dict[str, float], *, caregiver: bool) -> str:
     name = str(link["childName"])
+    if link.get("institutional"):
+        provider = str(link["caregiverName"])
+        if needs.get("hunger", 100) < 65:
+            return f"having lunch at {provider}"
+        if needs.get("hygiene", 100) < 55:
+            return f"getting cleaned up at {provider}"
+        return f"learning and playing at {provider}"
     if needs.get("hunger", 100) < 65:
         return f"feeding {name} a bottle" if caregiver else f"having a bottle with {link['caregiverName']}"
     if needs.get("hygiene", 100) < 55:
@@ -726,7 +760,13 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
         _sync_needs(connection, int(season["id"]), int(row["id"]), tick, before, needs)
         care_children = care_by_caregiver.get(int(row["id"]), [])
         receiving_care = care_by_child.get(int(row["id"]))
-        if care_children and 5.75 <= hour < 22:
+        urgent_care = False
+        for item in care_children:
+            child_needs = normalize_needs(loads(rows_by_id[item["childId"]]["needs_json"], {}))
+            if child_needs.get("hunger", 100) < 30 or child_needs.get("hygiene", 100) < 25:
+                urgent_care = True
+                break
+        if care_children and (5.75 <= hour < 22 or urgent_care):
             link = min(
                 care_children,
                 key=lambda item: min(normalize_needs(loads(rows_by_id[item["childId"]]["needs_json"], {})).values()),
@@ -755,14 +795,16 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
                 (mood["label"], int(round(mood["valence"])), int(round(mood["stress"])), int(round(needs["health"])), tick, season["id"], row["id"]),
             )
             continue
-        if receiving_care and 5.75 <= hour < 22:
+        if receiving_care and (
+            5.75 <= hour < 22 or needs.get("hunger", 100) < 30 or needs.get("hygiene", 100) < 25
+        ):
             activity = _care_activity(receiving_care, needs, caregiver=False)
             if needs.get("hunger", 100) < 65:
                 needs["hunger"] = min(100, needs["hunger"] + 3.5)
             if needs.get("hygiene", 100) < 55:
                 needs["hygiene"] = min(100, needs["hygiene"] + 3.0)
             _sync_needs(connection, int(season["id"]), int(row["id"]), tick, before, needs)
-            _place_inside(connection, int(season["id"]), int(row["id"]), str(receiving_care["home"]))
+            _place_inside(connection, int(season["id"]), int(row["id"]), str(receiving_care["location"]))
             connection.execute(
                 """
                 UPDATE resident_state SET activity=?,public_thought=?,intention=?,mood=?,needs_json=?,

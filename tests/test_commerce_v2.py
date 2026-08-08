@@ -3,8 +3,9 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from krabville.api import create_app
-from krabville.commerce_v2 import run_daily_commerce, run_phone_window
+from krabville.commerce_v2 import repair_dependent_finances, run_daily_commerce, run_phone_window
 from krabville.db import dumps, initialize, loads
+from krabville.runtime_v2 import account_balance, settle_daily_economy
 from krabville.world import advance_tick, start_season
 
 
@@ -76,6 +77,9 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
             assert detail.status_code == 200
             assert "phone" in detail.json()
             assert "homeInventory" in detail.json()
+        dependent = next(resident for resident in payload["residents"] if resident["lifeStage"] in {"baby", "child"})
+        assert dependent["care"]["state"] in {"covered", "institutional"}
+        assert dependent["care"]["caregiver"]
         home = next(item for item in payload["properties"] if item["type"] in {"house", "apartment"} and item["inside"])
         detail = client.get(f"/api/v3/properties/{home['slug']}")
         assert detail.status_code == 200
@@ -142,7 +146,7 @@ def test_default_can_repossess_and_move_a_household_to_safety(settings_factory) 
     connection.close()
 
 
-def test_dependent_care_keeps_a_caregiver_present_and_restores_needs(settings_factory) -> None:
+def test_dependent_care_keeps_a_caregiver_present_and_restores_needs_overnight(settings_factory) -> None:
     connection = initialize(settings_factory())
     start_season(connection, seed_hex="95" * 32)
     season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
@@ -169,7 +173,7 @@ def test_dependent_care_keeps_a_caregiver_present_and_restores_needs(settings_fa
         (season["id"], caregiver),
     )
     connection.execute(
-        "UPDATE seasons SET current_tick=108,current_day=0,world_minutes=540 WHERE id=?",
+        "UPDATE seasons SET current_tick=24,current_day=0,world_minutes=120 WHERE id=?",
         (season["id"],),
     )
     advance_tick(connection)
@@ -190,8 +194,115 @@ def test_dependent_care_keeps_a_caregiver_present_and_restores_needs(settings_fa
     assert connection.execute(
         "SELECT status FROM employment WHERE resident_id=? ORDER BY id DESC LIMIT 1", (caregiver,)
     ).fetchone()[0] == "leave"
-    assert connection.execute(
-        "SELECT care_state FROM resident_season_state WHERE season_id=? AND resident_id=?",
+    care_state = connection.execute(
+        "SELECT care_state,current_caregiver_id FROM resident_season_state WHERE season_id=? AND resident_id=?",
         (season["id"], child["id"]),
-    ).fetchone()[0] == "covered"
+    ).fetchone()
+    assert care_state["care_state"] == "covered"
+    assert care_state["current_caregiver_id"] == caregiver
+    connection.close()
+
+
+def test_school_care_places_children_inside_the_provider(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="97" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    child = connection.execute(
+        """
+        SELECT r.id,c.provider_business_id,b.name provider_name,
+          COALESCE(p.map_location,p.name,'Krabville School') provider_location
+        FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id AND l.current_stage='child'
+        JOIN childcare_arrangements c ON c.child_resident_id=r.id AND c.status='active'
+        JOIN businesses b ON b.id=c.provider_business_id
+        LEFT JOIN properties p ON p.id=b.property_id
+        ORDER BY r.id LIMIT 1
+        """
+    ).fetchone()
+    assert child
+    connection.execute(
+        "UPDATE seasons SET current_tick=108,current_day=0,world_minutes=540 WHERE id=?",
+        (season["id"],),
+    )
+    advance_tick(connection)
+    child_state = connection.execute(
+        "SELECT activity,location FROM resident_state WHERE season_id=? AND resident_id=?",
+        (season["id"], child["id"]),
+    ).fetchone()
+    care_state = connection.execute(
+        "SELECT care_state,current_caregiver_id,current_care_provider_id FROM resident_season_state WHERE season_id=? AND resident_id=?",
+        (season["id"], child["id"]),
+    ).fetchone()
+    assert child_state["location"] == child["provider_location"]
+    assert child["provider_name"] in child_state["activity"]
+    assert care_state["care_state"] == "institutional"
+    assert care_state["current_caregiver_id"] is None
+    assert care_state["current_care_provider_id"] == child["provider_business_id"]
+    connection.close()
+
+
+def test_dependents_are_not_billed_and_old_personal_debt_is_reversed(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="96" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    dependent = connection.execute(
+        """
+        SELECT r.id,r.name FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.current_stage IN ('baby','child') ORDER BY r.id LIMIT 1
+        """
+    ).fetchone()
+    settle_daily_economy(connection, int(season["id"]), 0, 48)
+    assert not connection.execute(
+        "SELECT 1 FROM financial_transactions WHERE season_id=? AND external_key=?",
+        (season["id"], f"settlement:0:resident:{dependent['id']}"),
+    ).fetchone()
+
+    loan = int(connection.execute(
+        """
+        INSERT INTO financial_accounts(
+          resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
+        ) VALUES(?,'Legacy dependent loan','loan',0,?,48) RETURNING id
+        """,
+        (dependent["id"], season["id"]),
+    ).fetchone()[0])
+    connection.execute(
+        """
+        INSERT INTO debts(
+          borrower_account_id,debt_type,principal_cents,outstanding_cents,
+          annual_rate_basis_points,minimum_payment_cents,opened_season_id,opened_tick,status
+        ) VALUES(?,'credit',5802,5802,750,2500,?,48,'current')
+        """,
+        (loan, season["id"]),
+    )
+    clearing = int(connection.execute(
+        """
+        SELECT a.id FROM financial_accounts a JOIN businesses b ON b.id=a.business_id
+        WHERE b.name='Krabville Credit Union' AND a.name='Operating'
+        """
+    ).fetchone()[0])
+    transaction_id = int(connection.execute(
+        """
+        INSERT INTO financial_transactions(
+          season_id,tick,category,description,status,external_key,created_at,posted_at
+        ) VALUES(?,48,'daily_settlement','Legacy bad charge','posted','legacy-dependent-charge',
+          '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z') RETURNING id
+        """,
+        (season["id"],),
+    ).fetchone()[0])
+    connection.executemany(
+        "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
+        ((transaction_id, loan, -5802, "legacy debt"), (transaction_id, clearing, 5802, "legacy offset")),
+    )
+
+    assert repair_dependent_finances(connection) == 1
+    assert account_balance(connection, loan) == 0
+    assert connection.execute("SELECT status FROM financial_accounts WHERE id=?", (loan,)).fetchone()[0] == "closed"
+    debt = connection.execute("SELECT status,outstanding_cents FROM debts WHERE borrower_account_id=?", (loan,)).fetchone()
+    assert debt["status"] == "forgiven"
+    assert debt["outstanding_cents"] == 0
+    assert not list(connection.execute(
+        """
+        SELECT t.id FROM financial_transactions t JOIN transaction_entries e ON e.transaction_id=t.id
+        WHERE t.status='posted' GROUP BY t.id HAVING SUM(e.amount_cents)<>0
+        """
+    ))
     connection.close()

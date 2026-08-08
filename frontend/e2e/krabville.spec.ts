@@ -51,26 +51,40 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   const rosterToggle = page.locator("#roster-toggle");
   if (await rosterToggle.isVisible()) await rosterToggle.click();
-  const firstResident = page.locator(".resident-row").first();
-  await firstResident.hover();
-  await expect(page.locator("#resident-peek")).toBeVisible();
-  expect(await page.locator("#resident-peek .peek-need").count()).toBeGreaterThanOrEqual(5);
-  await expect(page.locator("#resident-peek .peek-forecast")).toContainText("Pondering");
-  await firstResident.click();
+  const dependent = page.locator('.resident-row[data-life-stage="baby"], .resident-row[data-life-stage="child"]').first();
+  if (!(await rosterToggle.isVisible())) {
+    await dependent.hover();
+    await expect(page.locator("#resident-peek")).toBeVisible();
+    expect(await page.locator("#resident-peek .peek-need").count()).toBeGreaterThanOrEqual(5);
+    await expect(page.locator("#resident-peek .peek-forecast")).toContainText("Pondering");
+    await expect(page.locator("#resident-peek .peek-care")).toContainText("Caregiver");
+  }
+  await dependent.click();
   await expect(page.locator("#dossier")).toBeVisible();
   await expect(page.locator("#dossier-name")).not.toHaveText("Loading...");
   await expect(page.locator("#dossier .decision-row")).toHaveCount(3);
-  await expect(page.getByRole("button", { name: "Needs & wants" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Secrets & beliefs" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Finances" })).toBeVisible();
-  await page.getByRole("button", { name: "Needs & wants" }).click();
+  const dossier = page.locator("#dossier");
+  await expect(dossier.getByRole("button", { name: "Needs", exact: true })).toBeVisible();
+  await expect(dossier.getByRole("button", { name: "Secrets", exact: true })).toBeVisible();
+  await expect(dossier.getByRole("button", { name: "Money", exact: true })).toBeVisible();
+  await dossier.getByRole("button", { name: "Needs", exact: true }).click();
   await expect(page.locator("#dossier-needs .section-label").first()).toContainText("high is healthy");
   const satisfaction = await page.locator("#dossier-needs .need-row").evaluateAll((rows) => rows.map((row) => Number((row as HTMLElement).dataset.satisfaction)));
   expect(satisfaction.every((value) => value >= 0 && value <= 100)).toBe(true);
-  await page.getByRole("button", { name: "Relationships" }).click();
+  await dossier.getByRole("button", { name: "Health", exact: true }).click();
+  await expect(page.locator("#dossier-health")).toContainText(/caregiver/i);
+  await expect(page.locator("#dossier-health .fact-grid article").filter({ hasText: "Caregiver" }).locator("b")).not.toHaveText("Independent");
+  await dossier.getByRole("button", { name: "Relationships", exact: true }).click();
   await expect(page.locator("#relationship-canvas")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("#dossier")).toBeHidden();
+
+  await page.locator('[data-explore="bank"]').click();
+  await expect(page.locator("#explore-view")).toBeVisible();
+  await expect(page).toHaveURL(/#\/explore\/bank$/);
+  await expect(page.locator(".bank-ledger button[data-resident]").first()).toBeVisible();
+  await page.locator("#explore-close").click();
+  await expect(page).not.toHaveURL(/#\/explore\//);
 
   const storyToggle = page.locator("#story-toggle");
   if (await storyToggle.isVisible()) await storyToggle.click();
@@ -99,4 +113,12 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
     });
   }
   expect(consoleErrors).toEqual([]);
+});
+
+test("directory deep links open after the first state load", async ({ page }) => {
+  await page.goto("/#/explore/bank");
+  await expect(page.locator("#live-state b")).toContainText(/running|paused|complete/i);
+  await expect(page.locator("#explore-view")).toBeVisible();
+  await expect(page.locator("#explore-title")).toHaveText("Bank & economy");
+  await expect(page.locator('[data-explore="bank"]')).toHaveClass(/active/);
 });

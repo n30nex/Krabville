@@ -117,9 +117,10 @@ def initialize(settings: Settings) -> sqlite3.Connection:
     connection = connect(settings.database_path)
     migrate(connection)
     seed_residents(connection)
-    from .commerce_v2 import seed_commerce
+    from .commerce_v2 import repair_dependent_finances, seed_commerce
 
     seed_commerce(connection)
+    repair_dependent_finances(connection)
     return connection
 
 
@@ -145,11 +146,15 @@ def resident_rows(connection: sqlite3.Connection, season_id: int) -> list[sqlite
                    s.activity, s.public_thought, s.intention, s.reflection,
                    s.mood, s.needs_json, s.path_json, s.action_until_tick,
                    s.updated_tick,v.life_stage,v.decision_state,v.current_decision_id,
-                   v.household_id,v.care_state
+                   v.household_id,v.care_state,v.current_caregiver_id,
+                   v.current_care_provider_id,caregiver.name caregiver_name,
+                   care_provider.name care_provider_name
             FROM residents r
             JOIN resident_state s ON s.resident_id=r.id
             LEFT JOIN resident_season_state v
               ON v.resident_id=r.id AND v.season_id=s.season_id
+            LEFT JOIN residents caregiver ON caregiver.id=v.current_caregiver_id
+            LEFT JOIN businesses care_provider ON care_provider.id=v.current_care_provider_id
             WHERE s.season_id=? ORDER BY r.id
             """,
             (season_id,),

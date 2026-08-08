@@ -205,6 +205,10 @@ def _resident_base_v2(
         "indoors": indoors,
         "building": location if indoors else None,
         "updatedTick": int(row["updated_tick"]),
+        "care": {
+            "state": str(row["care_state"] or "independent"),
+            "caregiver": row["caregiver_name"] or row["care_provider_name"],
+        },
         **_resident_live_v2(connection, season_id, int(row["id"]), row),
     }
 
@@ -281,6 +285,16 @@ def _resident_detail_v2(
         """,
         (resident_id,),
     ))
+    current_care = connection.execute(
+        """
+        SELECT v.care_state,r.name caregiver_name,b.name provider_name
+        FROM resident_season_state v
+        LEFT JOIN residents r ON r.id=v.current_caregiver_id
+        LEFT JOIN businesses b ON b.id=v.current_care_provider_id
+        WHERE v.season_id=? AND v.resident_id=?
+        """,
+        (season_id, resident_id),
+    ).fetchone()
     job = connection.execute(
         """
         SELECT j.title,b.name employer,e.status,e.performance,e.scheduled_minutes_per_day,e.wage_cents
@@ -452,10 +466,18 @@ def _resident_detail_v2(
         "secrets": secrets,
         "beliefs": beliefs,
         "health": {
-            "status": "Needs care" if care else "Independent",
+            "status": (
+                "Care covered" if current_care and current_care["care_state"] in {"covered", "institutional"}
+                else "Care gap" if current_care and current_care["care_state"] == "uncovered"
+                else "Needs care" if care else "Independent"
+            ),
             "conditions": conditions,
             "care": [str(item["arrangement_type"]) for item in care],
-            "caregiver": str(care[0]["caregiver_name"] or care[0]["provider_name"]) if care else None,
+            "caregiver": (
+                str(current_care["caregiver_name"] or current_care["provider_name"])
+                if current_care and (current_care["caregiver_name"] or current_care["provider_name"])
+                else str(care[0]["caregiver_name"] or care[0]["provider_name"]) if care else None
+            ),
         },
         "career": ({
             "title": job["title"], "employer": job["employer"], "status": job["status"],
@@ -804,10 +826,15 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
         SELECT r.*,s.x,s.y,s.destination_x,s.destination_y,s.location,s.activity,
           s.public_thought,s.intention,s.reflection,s.mood,s.needs_json,s.path_json,
           s.action_until_tick,s.updated_tick,v.life_stage,v.stage_season_index,
-          v.decision_state,v.current_decision_id,v.household_id,h.name household_name
+          v.decision_state,v.current_decision_id,v.household_id,v.care_state,
+          v.current_caregiver_id,v.current_care_provider_id,
+          caregiver.name caregiver_name,care_provider.name care_provider_name,
+          h.name household_name
         FROM residents r JOIN resident_state s ON s.resident_id=r.id
         LEFT JOIN resident_season_state v
           ON v.resident_id=r.id AND v.season_id=s.season_id
+        LEFT JOIN residents caregiver ON caregiver.id=v.current_caregiver_id
+        LEFT JOIN businesses care_provider ON care_provider.id=v.current_care_provider_id
         LEFT JOIN households h ON h.id=v.household_id
         WHERE s.season_id=? ORDER BY r.id
         """,
@@ -1239,10 +1266,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 SELECT r.*,s.x,s.y,s.destination_x,s.destination_y,s.location,s.activity,
                   s.public_thought,s.intention,s.reflection,s.mood,s.needs_json,s.path_json,
                   s.action_until_tick,s.updated_tick,v.life_stage,v.stage_season_index,
-                  v.decision_state,v.current_decision_id,v.household_id,h.name household_name
+                  v.decision_state,v.current_decision_id,v.household_id,v.care_state,
+                  v.current_caregiver_id,v.current_care_provider_id,
+                  caregiver.name caregiver_name,care_provider.name care_provider_name,
+                  h.name household_name
                 FROM residents r JOIN resident_state s ON s.resident_id=r.id
                 LEFT JOIN resident_season_state v
                   ON v.resident_id=r.id AND v.season_id=s.season_id
+                LEFT JOIN residents caregiver ON caregiver.id=v.current_caregiver_id
+                LEFT JOIN businesses care_provider ON care_provider.id=v.current_care_provider_id
                 LEFT JOIN households h ON h.id=v.household_id
                 WHERE s.season_id=? AND r.slug=?
                 """,
