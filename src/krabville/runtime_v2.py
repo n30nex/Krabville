@@ -6,7 +6,7 @@ import sqlite3
 from typing import Any
 
 from .db import dumps, loads, now_iso
-from .economy_v2 import settle_day
+from .economy_v2 import settle_day, settle_household_costs
 from .population_v2 import ADULT_STAGES, MINOR_STAGES, generate_starting_population
 from .simulation_v2 import DEFAULT_NEEDS, NEED_NAMES
 
@@ -1599,8 +1599,6 @@ def _daily_personal_expenses(
 
     expenses = {
         "food": chooser.randint(1_150, 1_750) + max(0, 70 - satisfaction("hunger")) * 16,
-        "housing": chooser.randint(2_150, 3_050),
-        "utilities": chooser.randint(380, 780),
         "transport": chooser.randint(400, 850) if employed else chooser.randint(80, 300),
         "essentials": chooser.randint(250, 700),
         "communications": chooser.randint(160, 460),
@@ -1620,8 +1618,126 @@ def _daily_personal_expenses(
     return expenses
 
 
+def _post_financial_flow(
+    connection: sqlite3.Connection,
+    season_id: int,
+    tick: int,
+    category: str,
+    description: str,
+    external_key: str,
+    entries: list[tuple[int, int, str]],
+) -> bool:
+    if connection.execute(
+        "SELECT 1 FROM financial_transactions WHERE season_id=? AND external_key=?",
+        (season_id, external_key),
+    ).fetchone():
+        return False
+    posted = [(account_id, amount, memo) for account_id, amount, memo in entries if amount]
+    if not posted or sum(amount for _, amount, _ in posted) != 0:
+        raise ValueError(f"unbalanced {category} flow")
+    timestamp = now_iso()
+    transaction_id = int(connection.execute(
+        """
+        INSERT INTO financial_transactions(
+          season_id,tick,category,description,status,external_key,created_at,posted_at
+        ) VALUES(?,?,?,?, 'posted',?,?,?) RETURNING id
+        """,
+        (season_id, tick, category, description, external_key, timestamp, timestamp),
+    ).fetchone()[0])
+    connection.executemany(
+        "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
+        ((transaction_id, account_id, amount, memo) for account_id, amount, memo in posted),
+    )
+    return True
+
+
+def _post_legacy_settlement_marker(
+    connection: sqlite3.Connection,
+    season_id: int,
+    tick: int,
+    external_key: str,
+    description: str,
+    *,
+    category: str = "daily_settlement",
+) -> bool:
+    if connection.execute(
+        "SELECT 1 FROM financial_transactions WHERE season_id=? AND external_key=?",
+        (season_id, external_key),
+    ).fetchone():
+        return False
+    timestamp = now_iso()
+    connection.execute(
+        """
+        INSERT INTO financial_transactions(
+          season_id,tick,category,description,status,external_key,created_at,posted_at
+        ) VALUES(?,?,?,?, 'void',?,?,?)
+        """,
+        (season_id, tick, category, description, external_key, timestamp, timestamp),
+    )
+    return True
+
+
+def _set_runtime_debt(
+    connection: sqlite3.Connection,
+    *,
+    amount_cents: int,
+    season_id: int,
+    tick: int,
+    debt_id: int | None,
+    account_id: int | None,
+    owner_column: str,
+    owner_id: int,
+    account_name: str,
+    debt_type: str,
+    annual_rate_basis_points: int = 750,
+) -> int | None:
+    if owner_column not in {"resident_id", "household_id"}:
+        raise ValueError("unsupported debt owner")
+    amount = max(0, int(amount_cents))
+    if debt_id is not None and account_id is not None:
+        connection.execute(
+            "UPDATE debts SET outstanding_cents=?,status=CASE WHEN ?=0 THEN 'paid' ELSE status END WHERE id=?",
+            (amount, amount, debt_id),
+        )
+        return account_id
+    if amount == 0:
+        return None
+    account = connection.execute(
+        f"SELECT id FROM financial_accounts WHERE {owner_column}=? AND name=?",
+        (owner_id, account_name),
+    ).fetchone()
+    if account:
+        account_id = int(account[0])
+        connection.execute(
+            """
+            UPDATE financial_accounts SET account_type='loan',status='open',
+              closed_season_id=NULL,closed_tick=NULL WHERE id=?
+            """,
+            (account_id,),
+        )
+    else:
+        account_id = int(connection.execute(
+            f"""
+            INSERT INTO financial_accounts(
+              {owner_column},name,account_type,opening_balance_cents,opened_season_id,opened_tick
+            ) VALUES(?,?,'loan',0,?,?) RETURNING id
+            """,
+            (owner_id, account_name, season_id, tick),
+        ).fetchone()[0])
+    connection.execute(
+        """
+        INSERT INTO debts(
+          borrower_account_id,debt_type,principal_cents,outstanding_cents,
+          annual_rate_basis_points,minimum_payment_cents,opened_season_id,opened_tick,status
+        ) VALUES(?,?,?,?,?,2500,?,?,'current')
+        """,
+        (account_id, debt_type, amount, amount, annual_rate_basis_points, season_id, tick),
+    )
+    return account_id
+
+
 def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: int, tick: int) -> dict[str, int]:
-    """Post one idempotent, balanced household settlement at 04:00."""
+    """Post idempotent categorized resident and household settlement flows at 04:00."""
 
     clearing = connection.execute(
         """
@@ -1641,30 +1757,20 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
     ))
     business_accounts = {str(row["name"]): int(row["account_id"]) for row in business_records}
     expense_recipients = {
-        "food": "Lagoon General Store",
-        "housing": "Krabville Credit Union",
-        "utilities": "Community House",
-        "transport": "Lagoon Ferry",
-        "essentials": "Lagoon General Store",
-        "childcare": "Krabville School",
-        "communications": "Signal House",
-        "entertainment": "Dockside Studio",
-        "dining": "Blue Kettle Cafe",
-        "healthcare": "Lagoon Health Centre",
-        "repairs": "Harbour Works",
-        "education": "Harbour Library",
+        "food": "Lagoon General Store", "rent": "Krabville Credit Union",
+        "utilities": "Community House", "transport": "Lagoon Ferry",
+        "essentials": "Lagoon General Store", "childcare": "Krabville School",
+        "communications": "Signal House", "entertainment": "Dockside Studio",
+        "dining": "Blue Kettle Cafe", "healthcare": "Lagoon Health Centre",
+        "repairs": "Harbour Works", "education": "Harbour Library",
         "community": "Community House",
     }
     recipient_terms = {
-        "food": ("grocery", "provisions", "food"),
-        "essentials": ("shop", "provisions", "general"),
+        "food": ("grocery", "provisions", "food"), "essentials": ("shop", "provisions", "general"),
         "communications": ("radio", "signal", "communications"),
-        "entertainment": ("studio", "creative", "recreation"),
-        "dining": ("cafe", "food"),
-        "healthcare": ("health", "medical", "care"),
-        "repairs": ("repair", "hardware", "works"),
-        "education": ("school", "library", "education"),
-        "community": ("community", "care", "civic"),
+        "entertainment": ("studio", "creative", "recreation"), "dining": ("cafe", "food"),
+        "healthcare": ("health", "medical", "care"), "repairs": ("repair", "hardware", "works"),
+        "education": ("school", "library", "education"), "community": ("community", "care", "civic"),
         "childcare": ("school", "care", "child"),
     }
     expense_accounts: dict[str, list[int]] = {}
@@ -1675,18 +1781,23 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
             if any(term in description for term in recipient_terms.get(category, ())):
                 candidates.append(int(business["account_id"]))
         expense_accounts[category] = list(dict.fromkeys(candidates))
+
     totals = {
-        "transactions": 0,
-        "wages": 0,
-        "expenses": 0,
-        "childcare": 0,
-        "debt": 0,
-        "investments": 0,
-        "businessIncome": 0,
-        "businessPayroll": 0,
-        "servicePurchases": 0,
+        "transactions": 0, "categorizedTransactions": 0, "householdTransactions": 0,
+        "wages": 0, "taxes": 0, "expenses": 0, "rent": 0, "utilities": 0,
+        "childcare": 0, "debt": 0, "investments": 0, "businessIncome": 0,
+        "businessPayroll": 0, "servicePurchases": 0,
     }
-    for row in connection.execute(
+
+    def recipient_for(category: str, owner_id: int) -> int:
+        candidates = expense_accounts.get(category, [])
+        if not candidates:
+            return clearing_id
+        return candidates[
+            _rng(str(season_id), "expense-recipient", day, owner_id, category).randrange(len(candidates))
+        ]
+
+    residents = list(connection.execute(
         """
         SELECT r.id,r.name,a.id account_id,e.wage_cents,e.scheduled_minutes_per_day,e.status,
           employer.id employer_account_id,s.needs_json
@@ -1701,13 +1812,13 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
         ORDER BY r.id
         """,
         (season_id,),
-    ):
-        key = f"settlement:{day}:resident:{row['id']}"
-        transaction_row = connection.execute(
-            "SELECT id FROM financial_transactions WHERE season_id=? AND external_key=?",
-            (season_id, key),
-        ).fetchone()
-        if transaction_row:
+    ))
+    for row in residents:
+        marker_key = f"settlement:{day}:resident:{row['id']}"
+        if connection.execute(
+            "SELECT 1 FROM financial_transactions WHERE season_id=? AND external_key=?",
+            (season_id, marker_key),
+        ).fetchone():
             continue
         investment = connection.execute(
             """
@@ -1723,44 +1834,27 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
             """,
             (row["id"],),
         ).fetchone()
-        childcare = 0
-        for care in connection.execute(
-            """
-            SELECT c.child_resident_id,c.cost_per_day_cents FROM childcare_arrangements c
-            JOIN family_links f ON f.relative_resident_id=c.child_resident_id
-            WHERE f.resident_id=? AND f.relation_type='child' AND f.ended_season_id IS NULL
-              AND c.status='active'
-            """,
-            (row["id"],),
-        ):
-            parent_count = int(connection.execute(
-                """
-                SELECT COUNT(*) FROM family_links WHERE relative_resident_id=?
-                  AND relation_type='child' AND ended_season_id IS NULL
-                """,
-                (care["child_resident_id"],),
-            ).fetchone()[0])
-            childcare += int(care["cost_per_day_cents"]) // max(1, parent_count)
-        before_bank = account_balance(connection, int(row["account_id"]))
-        before_debt = int(debt["outstanding_cents"]) if debt else 0
-        before_investment = int(investment["market_value_cents"]) if investment else 0
+        worked = int(row["scheduled_minutes_per_day"] or 0) if row["status"] == "active" else 0
+        gross_estimate = max(0, int(row["wage_cents"] or 0)) * max(0, worked) // 60
+        tax_rate_bps = 1_000 if gross_estimate < 20_000 else 1_400 if gross_estimate < 30_000 else 1_800
         expenses = _daily_personal_expenses(
             season_id, day, int(row["id"]), row["needs_json"], row["status"] == "active"
         )
+        if gross_estimate:
+            expenses["taxes"] = gross_estimate * tax_rate_bps // 10_000
+        before_bank = max(0, account_balance(connection, int(row["account_id"])))
+        before_debt = int(debt["outstanding_cents"]) if debt else 0
+        before_investment = int(investment["market_value_cents"]) if investment else 0
         result = settle_day({
             "balances": {
-                "cash_cents": 0,
-                "bank_cents": max(0, before_bank),
-                "debt_cents": before_debt,
-                "investments_cents": before_investment,
+                "cash_cents": 0, "bank_cents": before_bank,
+                "debt_cents": before_debt, "investments_cents": before_investment,
             },
             "employment": {
-                "active": row["status"] == "active",
-                "hourly_wage_cents": int(row["wage_cents"] or 0),
-                "worked_minutes": int(row["scheduled_minutes_per_day"] or 0),
+                "active": row["status"] == "active", "hourly_wage_cents": int(row["wage_cents"] or 0),
+                "worked_minutes": worked,
             } if row["status"] else {},
             "expenses": expenses,
-            "childcare": {"active": childcare > 0, "cost_per_day_cents": childcare},
             "debt": {
                 "annual_rate_basis_points": int(debt["annual_rate_basis_points"]) if debt else 750,
                 "minimum_payment_cents": int(debt["minimum_payment_cents"]) if debt else 0,
@@ -1768,112 +1862,260 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
             "investment_return_bps": _rng(str(season_id), "investment", day, row["id"]).randint(-20, 20),
         })
         after = result["balances"]
-        liquid_delta = int(after["bank_cents"] + after["cash_cents"] - before_bank)
-        investment_delta = int(after["investments_cents"] - before_investment)
-        debt_delta = int(after["debt_cents"] - before_debt)
-        if debt:
-            connection.execute(
-                "UPDATE debts SET outstanding_cents=?,status=CASE WHEN ?=0 THEN 'paid' ELSE status END WHERE id=?",
-                (after["debt_cents"], after["debt_cents"], debt["id"]),
-            )
-            debt_account_id = int(debt["account_id"])
-        elif int(after["debt_cents"]) > 0:
-            prior_account = connection.execute(
-                "SELECT id FROM financial_accounts WHERE resident_id=? AND name='Emergency credit'",
-                (row["id"],),
-            ).fetchone()
-            if prior_account:
-                debt_account_id = int(prior_account["id"])
-                connection.execute(
-                    """
-                    UPDATE financial_accounts SET account_type='loan',status='open',
-                      closed_season_id=NULL,closed_tick=NULL WHERE id=?
-                    """,
-                    (debt_account_id,),
-                )
-            else:
-                debt_account_id = int(connection.execute(
-                    """
-                    INSERT INTO financial_accounts(
-                      resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
-                    ) VALUES(?,'Emergency credit','loan',0,?,?) RETURNING id
-                    """,
-                    (row["id"], season_id, tick),
-                ).fetchone()[0])
-            connection.execute(
-                """
-                INSERT INTO debts(
-                  borrower_account_id,debt_type,principal_cents,outstanding_cents,
-                  annual_rate_basis_points,minimum_payment_cents,opened_season_id,opened_tick,status
-                ) VALUES(?,'credit',?,?,750,2500,?,?,'current')
-                """,
-                (debt_account_id, after["debt_cents"], after["debt_cents"], season_id, tick),
-            )
-        else:
-            debt_account_id = None
+        debt_account_id = _set_runtime_debt(
+            connection,
+            amount_cents=int(after["debt_cents"]), season_id=season_id, tick=tick,
+            debt_id=int(debt["id"]) if debt else None,
+            account_id=int(debt["account_id"]) if debt else None,
+            owner_column="resident_id", owner_id=int(row["id"]),
+            account_name="Emergency credit", debt_type="credit",
+            annual_rate_basis_points=int(debt["annual_rate_basis_points"]) if debt else 750,
+        )
         if investment:
             connection.execute(
                 "UPDATE investments SET market_value_cents=?,updated_season_id=?,updated_tick=? WHERE id=?",
                 (after["investments_cents"], season_id, tick, investment["id"]),
             )
-        transaction_id = int(connection.execute(
-            """
-            INSERT INTO financial_transactions(
-              season_id,tick,category,description,status,external_key,created_at,posted_at
-            ) VALUES(?,?, 'daily_settlement',?,'posted',?,?,?) RETURNING id
-            """,
-            (season_id, tick, f"Daily economy settlement for {row['name']}", key, now_iso(), now_iso()),
-        ).fetchone()[0])
-        flows: dict[int, int] = {}
-        flow_memos: dict[int, list[str]] = {}
 
-        def add_flow(account_id: int, amount: int, memo: str) -> None:
-            if amount:
-                flows[account_id] = flows.get(account_id, 0) + amount
-                flow_memos.setdefault(account_id, []).append(memo)
-
-        add_flow(int(row["account_id"]), liquid_delta, "resident daily net")
-        if investment:
-            add_flow(int(investment["account_id"]), investment_delta, "investment valuation")
-        if debt_account_id:
-            add_flow(debt_account_id, -debt_delta, "debt balance change")
-        wages = int(result["totals"]["wages_cents"])
-        if wages and row["employer_account_id"]:
-            add_flow(int(row["employer_account_id"]), -wages, "payroll:wages")
-            totals["businessPayroll"] += wages
         for settled in result["ledger"]:
-            category = str(settled["category"])
-            candidates = expense_accounts.get(category, [])
-            if not candidates:
-                continue
-            business_account = candidates[
-                _rng(str(season_id), "expense-recipient", day, row["id"], category).randrange(len(candidates))
-            ]
-            receipt = sum(
-                int(entry["amount_cents"])
-                for entry in settled["entries"]
-                if str(entry["account"]).startswith("expense:") and int(entry["amount_cents"]) > 0
-            )
-            add_flow(business_account, receipt, f"service:{category}")
-            totals["businessIncome"] += receipt
-            if category not in {"food", "housing", "utilities", "transport", "essentials", "childcare"}:
-                totals["servicePurchases"] += 1
-        add_flow(clearing_id, -sum(flows.values()), "balanced settlement clearing")
-        entries = [
-            (account_id, amount, "; ".join(dict.fromkeys(flow_memos.get(account_id, ["daily settlement flow"]))))
-            for account_id, amount in flows.items()
-            if amount
-        ]
-        connection.executemany(
-            "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
-            [(transaction_id, account_id, amount, memo) for account_id, amount, memo in entries],
-        )
-        totals["transactions"] += 1
-        totals["wages"] += int(result["totals"]["wages_cents"])
-        totals["expenses"] += int(result["totals"]["expenses_cents"])
-        totals["childcare"] += int(result["totals"]["childcare_cents"])
+            source_category = str(settled["category"])
+            entries = settled["entries"]
+            if source_category == "wages":
+                amount = int(result["totals"]["wages_cents"])
+                payer = int(row["employer_account_id"] or clearing_id)
+                posted = _post_financial_flow(
+                    connection, season_id, tick, "wages", f"Wages for {row['name']}",
+                    f"{marker_key}:wages",
+                    [(int(row["account_id"]), amount, "gross wages"), (payer, -amount, "payroll")],
+                )
+                if posted:
+                    totals["wages"] += amount
+                    totals["businessPayroll"] += amount if row["employer_account_id"] else 0
+            elif source_category == "investment_return" and investment:
+                change = int(after["investments_cents"]) - before_investment
+                posted = _post_financial_flow(
+                    connection, season_id, tick, "investments", f"Investment valuation for {row['name']}",
+                    f"{marker_key}:investments",
+                    [(int(investment["account_id"]), change, "investment valuation"),
+                     (clearing_id, -change, "market valuation offset")],
+                )
+            elif source_category == "debt_interest" and debt_account_id:
+                amount = int(result["totals"]["debt_interest_cents"])
+                posted = _post_financial_flow(
+                    connection, season_id, tick, "debt", f"Debt interest for {row['name']}",
+                    f"{marker_key}:debt-interest",
+                    [(debt_account_id, -amount, "interest liability"), (clearing_id, amount, "interest income")],
+                )
+            elif source_category == "debt_payment" and debt_account_id:
+                amount = int(result["totals"]["debt_payment_cents"])
+                posted = _post_financial_flow(
+                    connection, season_id, tick, "debt", f"Debt payment for {row['name']}",
+                    f"{marker_key}:debt-payment",
+                    [(int(row["account_id"]), -amount, "debt payment"),
+                     (debt_account_id, amount, "liability reduction")],
+                )
+            else:
+                funded = sum(
+                    int(entry["amount_cents"]) for entry in entries
+                    if str(entry["account"]).startswith("expense:") and int(entry["amount_cents"]) > 0
+                )
+                paid = -sum(
+                    int(entry["amount_cents"]) for entry in entries
+                    if str(entry["account"]).startswith("asset:") and int(entry["amount_cents"]) < 0
+                )
+                borrowed = -sum(
+                    int(entry["amount_cents"]) for entry in entries
+                    if str(entry["account"]) == "liability:debt" and int(entry["amount_cents"]) < 0
+                )
+                recipient = clearing_id if source_category == "taxes" else recipient_for(source_category, int(row["id"]))
+                flow_entries = [(int(row["account_id"]), -paid, f"{source_category} payment")]
+                if borrowed and debt_account_id:
+                    flow_entries.append((debt_account_id, -borrowed, f"{source_category} credit"))
+                receipt_memo = (
+                    f"service:{source_category}" if recipient != clearing_id
+                    else f"{source_category} receipt"
+                )
+                flow_entries.append((recipient, funded, receipt_memo))
+                posted = _post_financial_flow(
+                    connection, season_id, tick, source_category,
+                    f"{source_category.replace('_', ' ').title()} for {row['name']}",
+                    f"{marker_key}:{source_category}", flow_entries,
+                )
+                if posted:
+                    if source_category == "taxes":
+                        totals["taxes"] += funded
+                    else:
+                        totals["expenses"] += funded
+                        totals["businessIncome"] += funded if recipient != clearing_id else 0
+                        if source_category not in {"food", "transport", "essentials"}:
+                            totals["servicePurchases"] += 1
+            totals["categorizedTransactions"] += int(posted)
+        if _post_legacy_settlement_marker(
+            connection, season_id, tick, marker_key, f"Categorized daily settlement for {row['name']}"
+        ):
+            totals["transactions"] += 1
         totals["debt"] += int(after["debt_cents"])
         totals["investments"] += int(after["investments_cents"])
+
+    from .commerce_v2 import record_housing_settlement
+
+    for household in connection.execute(
+        """
+        SELECT h.id,h.name,a.id account_id,po.monthly_cost_cents,p.slug property_slug,
+          COUNT(hm.resident_id) members
+        FROM households h JOIN financial_accounts a ON a.household_id=h.id
+          AND a.name='Household chequing' AND a.status='open'
+        JOIN household_members hm ON hm.household_id=h.id AND hm.ended_season_id IS NULL
+        LEFT JOIN property_occupancy po ON po.household_id=h.id AND po.ended_season_id IS NULL
+        LEFT JOIN properties p ON p.id=po.property_id
+        WHERE h.status='active' GROUP BY h.id ORDER BY h.id
+        """
+    ):
+        marker_key = f"settlement:{day}:household:{household['id']}"
+        if connection.execute(
+            "SELECT 1 FROM financial_transactions WHERE season_id=? AND external_key=?",
+            (season_id, marker_key),
+        ).fetchone():
+            continue
+        household_id = int(household["id"])
+        account_id = int(household["account_id"])
+        rent = 0 if household["property_slug"] == "harbour-shelter" else (
+            int(household["monthly_cost_cents"] or 0) + 29
+        ) // 30
+        utilities = 420 + int(household["members"]) * 115 + _rng(
+            str(season_id), "utilities", day, household_id
+        ).randint(0, 180)
+        childcare = int(connection.execute(
+            """
+            SELECT COALESCE(SUM(c.cost_per_day_cents),0) FROM childcare_arrangements c
+            JOIN household_members hm ON hm.resident_id=c.child_resident_id AND hm.ended_season_id IS NULL
+            WHERE hm.household_id=? AND c.status='active'
+            """,
+            (household_id,),
+        ).fetchone()[0])
+        costs = {"rent": rent, "utilities": utilities}
+        required = rent + utilities + childcare
+        available = account_balance(connection, account_id)
+        shortfall = max(0, required + 25_000 - available)
+        contributors = connection.execute(
+            """
+            SELECT r.id,a.id account_id FROM household_members hm JOIN residents r ON r.id=hm.resident_id
+            JOIN financial_accounts a ON a.resident_id=r.id AND a.name='Personal chequing' AND a.status='open'
+            WHERE hm.household_id=? AND hm.ended_season_id IS NULL AND hm.financially_responsible=1
+            ORDER BY r.id
+            """,
+            (household_id,),
+        ).fetchall()
+        for contributor in contributors:
+            if shortfall <= 0:
+                break
+            personal = account_balance(connection, int(contributor["account_id"]))
+            contribution = min(shortfall, max(0, personal - 25_000))
+            if not contribution:
+                continue
+            if _post_financial_flow(
+                connection, season_id, tick, "household_funding",
+                f"Household contribution to {household['name']}",
+                f"{marker_key}:funding:{contributor['id']}",
+                [(int(contributor["account_id"]), -contribution, "household contribution"),
+                 (account_id, contribution, "shared household funds")],
+            ):
+                totals["categorizedTransactions"] += 1
+            shortfall -= contribution
+
+        household_debt = connection.execute(
+            """
+            SELECT d.*,a.id account_id FROM debts d JOIN financial_accounts a ON a.id=d.borrower_account_id
+            WHERE a.household_id=? AND d.status IN ('current','late','defaulted') ORDER BY d.id LIMIT 1
+            """,
+            (household_id,),
+        ).fetchone()
+        before_debt = int(household_debt["outstanding_cents"]) if household_debt else 0
+        result = settle_household_costs(
+            {"bank_cents": max(0, account_balance(connection, account_id)), "debt_cents": before_debt},
+            costs,
+            childcare_cents=childcare,
+            debt={
+                "annual_rate_basis_points": int(household_debt["annual_rate_basis_points"]) if household_debt else 650,
+                "minimum_payment_cents": int(household_debt["minimum_payment_cents"]) if household_debt else 0,
+            },
+        )
+        after = result["balances"]
+        debt_account_id = _set_runtime_debt(
+            connection,
+            amount_cents=int(after["debt_cents"]), season_id=season_id, tick=tick,
+            debt_id=int(household_debt["id"]) if household_debt else None,
+            account_id=int(household_debt["account_id"]) if household_debt else None,
+            owner_column="household_id", owner_id=household_id,
+            account_name="Housing arrears", debt_type="loan",
+            annual_rate_basis_points=int(household_debt["annual_rate_basis_points"]) if household_debt else 650,
+        )
+        rent_borrowed = 0
+        for settled in result["ledger"]:
+            source_category = str(settled["category"])
+            entries = settled["entries"]
+            if source_category == "debt_interest" and debt_account_id:
+                amount = int(result["totals"]["debt_interest_cents"])
+                posted = _post_financial_flow(
+                    connection, season_id, tick, "debt", f"Household debt interest for {household['name']}",
+                    f"{marker_key}:debt-interest",
+                    [(debt_account_id, -amount, "interest liability"), (clearing_id, amount, "interest income")],
+                )
+            elif source_category == "debt_payment" and debt_account_id:
+                amount = int(result["totals"]["debt_payment_cents"])
+                posted = _post_financial_flow(
+                    connection, season_id, tick, "debt", f"Household debt payment for {household['name']}",
+                    f"{marker_key}:debt-payment",
+                    [(account_id, -amount, "debt payment"), (debt_account_id, amount, "liability reduction")],
+                )
+            else:
+                funded = sum(
+                    int(entry["amount_cents"]) for entry in entries
+                    if str(entry["account"]).startswith("expense:") and int(entry["amount_cents"]) > 0
+                )
+                paid = -sum(
+                    int(entry["amount_cents"]) for entry in entries
+                    if str(entry["account"]).startswith("asset:") and int(entry["amount_cents"]) < 0
+                )
+                borrowed = -sum(
+                    int(entry["amount_cents"]) for entry in entries
+                    if str(entry["account"]) == "liability:debt" and int(entry["amount_cents"]) < 0
+                )
+                if source_category == "rent":
+                    rent_borrowed = borrowed
+                recipient = recipient_for(source_category, household_id)
+                flow_entries = [(account_id, -paid, f"{source_category} payment")]
+                if borrowed and debt_account_id:
+                    flow_entries.append((debt_account_id, -borrowed, f"{source_category} arrears"))
+                receipt_memo = (
+                    f"service:{source_category}" if recipient != clearing_id
+                    else f"{source_category} receipt"
+                )
+                flow_entries.append((recipient, funded, receipt_memo))
+                posted = _post_financial_flow(
+                    connection, season_id, tick, source_category,
+                    f"{source_category.replace('_', ' ').title()} for {household['name']}",
+                    f"{marker_key}:{source_category}", flow_entries,
+                )
+                if posted:
+                    totals["expenses"] += funded
+                    totals["businessIncome"] += funded if recipient != clearing_id else 0
+                    if source_category == "rent":
+                        totals["rent"] += funded
+                    elif source_category == "utilities":
+                        totals["utilities"] += funded
+                    elif source_category == "childcare":
+                        totals["childcare"] += funded
+            totals["categorizedTransactions"] += int(posted)
+            totals["householdTransactions"] += int(posted)
+        record_housing_settlement(
+            connection, season_id, day, tick, household_id,
+            stable=rent_borrowed == 0,
+        )
+        _post_legacy_settlement_marker(
+            connection, season_id, tick, marker_key, f"Categorized household settlement for {household['name']}",
+            category="household_settlement",
+        )
     return totals
 
 

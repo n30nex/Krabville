@@ -41,6 +41,15 @@ const MAP_WIDTH = 4608;
 const MAP_HEIGHT = 3072;
 const LEGACY_MAP_WIDTH = 1774;
 const LEGACY_MAP_HEIGHT = 887;
+const V22_EVENT_KINDS = [
+  "goal_change",
+  "purchase",
+  "health",
+  "care_handoff",
+  "housing",
+  "relationship_change",
+  "verified_chronicle",
+] as const;
 
 type ExteriorSeason = "spring" | "summer" | "fall" | "winter";
 
@@ -70,7 +79,9 @@ app.innerHTML = `
       </nav>
       <div class="season-clock" id="season-clock">Waiting for the town...</div>
       <div class="status-cluster">
-        <div class="live-state" id="live-state"><span></span><b>Connecting</b></div>
+        <div class="live-state" id="live-state">
+          <span></span><b>Connecting</b><em id="model-state" hidden>Model fallback</em>
+        </div>
         <div class="budget-mini" id="budget-mini"></div>
       </div>
     </header>
@@ -304,7 +315,9 @@ function renderTop(value: KrabvilleState): void {
   const live = byId("live-state");
   const status = season?.status ?? "ready";
   live.className = `live-state ${status} ${season?.modelDegraded ? "degraded" : ""}`;
-  live.querySelector("b")!.textContent = season?.modelDegraded ? "Model degraded" : status;
+  live.querySelector("b")!.textContent = status;
+  const modelState = byId("model-state");
+  modelState.hidden = !season?.modelDegraded;
   const usage = value.usage;
   const callPercent = Math.min(100, (100 * usage.calls) / Math.max(1, usage.callLimit));
   byId("budget-mini").innerHTML = `
@@ -560,6 +573,11 @@ function eventCard(value: KrabvilleState): string {
 
 function renderLiveStory(value: KrabvilleState): string {
   const conversations = value.conversations.slice(-4).reverse();
+  const circuits = value.modelCircuits?.circuits ?? [];
+  const openCircuits = circuits.filter((circuit) => circuit.status !== "closed").length;
+  const activeCircuit = circuits.find((circuit) => circuit.status !== "closed");
+  const circuitLabel = value.modelCircuits?.summaryLabel
+    ?? (value.modelCircuits?.available ? (openCircuits ? `${openCircuits} fallback routes active` : "Primary routes healthy") : "Circuit telemetry unavailable");
   return `${eventCard(value)}
     <div class="section-label"><span>Recent conversations</span><b>${value.conversations.length}</b></div>
     <div class="conversation-list">
@@ -574,6 +592,7 @@ function renderLiveStory(value: KrabvilleState): string {
       <div><span>Tokens</span><b>${value.usage.totalTokens.toLocaleString()}</b><small>of ${value.usage.tokenGuard.toLocaleString()} guard</small></div>
       <div><span>Primary</span><b>${h(shortModel(value.models.primary))}</b><small>${h(value.models.primaryReasoning)} reasoning</small></div>
       <div><span>Fallback</span><b>${h(shortModel(value.models.fallback))}</b><small>${h(value.models.fallbackReasoning)} reasoning</small></div>
+      <div><span>Model routing</span><b>${h(circuitLabel)}</b><small>${activeCircuit ? `${h(activeCircuit.jobLabel ?? titleCase(activeCircuit.jobKind))} | ${h(activeCircuit.statusLabel ?? titleCase(activeCircuit.status))}` : value.modelCircuits?.available ? `${circuits.length} monitored job types` : "No routing state has been published"}</small></div>
     </div>`;
 }
 
@@ -583,7 +602,7 @@ function renderPoll(value: KrabvilleState): string {
   const total = poll.options.reduce((sum, option) => sum + option.votes, 0);
   return `
     <section class="poll-band">
-      <span>Day ${poll.day + 1} visitor decision</span>
+      <span>Day ${poll.day + 1} ${h(poll.winnerLabel ?? "visitor decision")}</span>
       <h3>${h(poll.question ?? (poll.status === "open" ? "Choose tomorrow's catalyst" : "Voting has closed"))}</h3>
       <p>Shape the environment, community, economy, relationships, or a wildcard surprise. ${poll.allowChange === false ? "Votes are final." : "You may change your vote before closing."}</p>
     </section>
@@ -592,7 +611,7 @@ function renderPoll(value: KrabvilleState): string {
       ${poll.options.map((option) => {
         const percent = total ? Math.round((100 * option.votes) / total) : 0;
         return `<button class="poll-choice ${option.winner ? "winner" : ""}" data-choice="${h(option.choiceId)}" ${poll.status !== "open" ? "disabled" : ""}>
-          <span><b>${h(option.choiceId)}</b><em>${h(option.category)}</em></span>
+          <span><b>${h(option.choiceId)}</b><em>${h(option.winner && poll.winnerLabel ? poll.winnerLabel : option.category)}</em></span>
           <h4>${h(option.title)}</h4><p>${h(option.preview)}</p>${option.impact || option.consequence ? `<em class="choice-impact">${h(option.impact ?? option.consequence)}</em>` : ""}
           <div class="choice-meter"><i style="width:${percent}%"></i></div><small>${option.votes} vote${option.votes === 1 ? "" : "s"}  |  ${percent}%</small>
         </button>`;
@@ -629,8 +648,8 @@ function renderMapVote(value: KrabvilleState): void {
     let nextOpen = dayStart + 24;
     if (nextOpen <= season.tick) nextOpen += 288;
     const winner = poll?.options.find((option) => option.winner);
-    trigger.querySelector("span")!.textContent = winner ? `Next: ${winner.title}` : "Next visitor vote";
-    trigger.querySelector("small")!.textContent = season.day >= 6 ? "Next season" : `opens in ${countdownLabel(nextOpen - season.tick)}`;
+    trigger.querySelector("span")!.textContent = winner ? `${poll?.winnerLabel ?? "Selected"}: ${winner.title}` : "Next visitor vote";
+    trigger.querySelector("small")!.textContent = season.day >= 6 ? "Next season" : `next vote opens in ${countdownLabel(nextOpen - season.tick)}`;
   }
   if (!poll || poll.status !== "open" || !mapVoteOpen) {
     panel.hidden = true;
@@ -642,15 +661,29 @@ function renderMapVote(value: KrabvilleState): void {
 }
 
 function renderDocket(value: KrabvilleState): string {
-  const activeGoals = value.goals.filter((goal) => goal.status === "active").slice(0, 12);
+  const activeGoals = (value.docket?.activeGoals ?? value.goals).filter((goal) => goal.status === "active" || goal.status === "pursuing").slice(0, 12);
+  const lifeGoals = (value.docket?.lifeGoals ?? value.lifeGoals ?? []).filter((goal) => goal.status === "active").slice(0, 12);
+  const facts = value.docket?.entries ?? value.ledger ?? [];
+  const verification = value.docket?.verification ?? value.ledgerVerification;
+  const evidenceCount = activeGoals.reduce((total, goal) => total + (goal.evidenceCount ?? goal.evidence?.length ?? 0), 0);
+  const lifeEvidenceCount = lifeGoals.reduce((total, goal) => total + goal.evidenceCount, 0);
+  const epilogues = value.docket?.epilogues ?? value.epilogues ?? [];
   return `
-    <div class="section-label"><span>Story docket</span><b>${activeGoals.length}</b></div>
+    <div class="docket-status ${verification?.available ? "verified" : "legacy"}"><div><span>Factual story docket</span><b>${facts.length} authoritative records</b></div><p>${verification?.available ? `${verification.verified} verified | ${verification.unverified} awaiting review | ${verification.participantLinks} participant links` : "Ledger facts are authoritative; pre-v2.2 verification metadata is not available."}</p></div>
+    <div class="section-label"><span>Latest ledger facts</span><b>${facts.length}</b></div>
+    ${renderLedgerEntries(facts.slice(0, 8), "The first factual event is waiting to happen.")}
+    <div class="section-label"><span>Long-term life goals</span><b>${lifeGoals.length} | ${lifeEvidenceCount} evidence</b></div>
+    <div class="life-goal-list">${lifeGoals.map((goal) => `
+      <button data-resident="${h(goal.resident)}"><span>${h(goal.residentName)} | ${h(titleCase(goal.category))}</span><p>${h(goal.description)}</p><div class="goal-meter"><i style="width:${Math.max(3, goal.progress)}%"></i></div><small>${goal.progress}% complete${goal.evidenceCount ? ` | ${goal.evidenceCount} connected actions` : ""}</small></button>
+    `).join("") || `<div class="empty-state">Long-term goals will appear after the v2.2 migration.</div>`}</div>
+    <div class="section-label"><span>Active goals</span><b>${activeGoals.length} | ${evidenceCount} evidence</b></div>
     <div class="docket-list">${activeGoals.map((goal) => `
-      <button data-resident="${h(goal.resident)}"><span>${h(goal.residentName)}</span><p>${h(goal.description)}</p><div class="goal-meter"><i style="width:${Math.max(3, goal.progress)}%"></i></div></button>
-    `).join("")}</div>
+      <button data-resident="${h(goal.resident)}"><span>${h(goal.residentName)} | ${h(goal.scope)}${goal.evidenceCount ? ` | ${goal.evidenceCount} proof` : ""}</span><p>${h(goal.description)}</p><div class="goal-meter"><i style="width:${Math.max(3, goal.progress)}%"></i></div></button>
+    `).join("") || `<div class="empty-state">No active goals are waiting.</div>`}</div>
+    ${epilogues.length ? `<div class="section-label"><span>Season epilogue</span><b>${epilogues.length}</b></div>${renderLedgerEntries(epilogues, "")}` : ""}
     <div class="section-label"><span>Daily chronicle</span><b>${value.chronicles.length} / 7</b></div>
     <div class="chronicle-list">${value.chronicles.slice().reverse().map((entry) => `
-      <article><span>Day ${entry.day + 1}</span><h4>${h(entry.title)}</h4><p>${h(entry.narrative)}</p></article>
+      <article><span>Day ${entry.day + 1} | ${h(entry.verificationStatus ?? "legacy")}</span><h4>${h(entry.title)}</h4><p>${h(entry.narrative)}</p></article>
     `).join("") || `<div class="empty-state">The first chronicle is written at nightfall.</div>`}</div>`;
 }
 
@@ -660,7 +693,7 @@ function renderLedgerEntries(entries: LedgerEntry[], empty: string): string {
   if (!entries.length) return `<div class="empty-state">${h(empty)}</div>`;
   const latest = entries.slice().sort((left, right) => (right.tick ?? right.day ?? 0) - (left.tick ?? left.day ?? 0)).slice(0, 16);
   return `<div class="town-card-list">${latest.map((entry) => `
-    <article><span>${h(entry.category ?? (entry.day !== undefined ? `Day ${entry.day + 1}` : "Town record"))}</span><h4>${h(entry.title)}</h4>${entry.summary ? `<p>${h(entry.summary)}</p>` : ""}${entry.amount !== undefined ? `<b>${formatCad(entry.amount)}</b>` : ""}</article>
+    <article class="${entry.epilogue ? "epilogue" : ""}"><span>${h(entry.epilogue ? "Season epilogue" : entry.category ?? (entry.day !== undefined ? `Day ${entry.day + 1}` : "Town record"))}${entry.verificationStatus ? ` | ${h(entry.verificationStatus)}` : ""}</span><h4>${h(entry.title)}</h4>${entry.summary ? `<p>${h(entry.summary)}</p>` : ""}${entry.participantDetails?.length ? `<small>${h(entry.participantDetails.map((person) => person.name).join(", "))}</small>` : ""}${entry.amount !== undefined ? `<b>${formatCad(entry.amount)}</b>` : ""}</article>
   `).join("")}</div>`;
 }
 
@@ -785,12 +818,17 @@ function renderAnalytics(value: KrabvilleState): string {
   }, {})).map(([label, count]) => ({ label, value: count })).sort((left, right) => right.value - left.value);
   const economy = value.economy;
   const history = economy?.history ?? [];
+  const indicators = economy?.indicators;
+  const metricHistory = economy?.metricHistory ?? [];
   const relationships = value.analytics?.relationships;
   const population = value.analytics?.population;
   const housing = value.analytics?.housing;
+  const care = value.analytics?.care;
+  const health = value.analytics?.health;
+  const circuitCount = value.modelCircuits?.circuits.filter((circuit) => circuit.status !== "closed").length ?? 0;
   const modelSeries = Object.entries(value.usage.models).map(([model, usage]) => ({ label: shortModel(model), value: usage.tokens }));
   return `<div class="analytics-hero"><div><span>Krabville Analytics Lab</span><h3>Town pulse at Day ${(value.season?.day ?? 0) + 1}, ${formatTime(value.season?.worldMinutes ?? 0)}</h3><p>Live social, wellbeing, economy, inventory, activity, and model measurements from the public simulation ledger.</p></div><div class="analytics-live"><i></i><b>${value.season?.status ?? "ready"}</b><span>updated ${new Date(value.updatedAt).toLocaleTimeString()}</span></div></div>
-    <div class="analytics-kpis"><article><span>Population plan</span><b>${population?.living ?? value.residents.length} / ${population?.target ?? 24}</b><small>${stageCounts.map((item) => `${item.value} ${item.label.toLowerCase()}`).join(" | ")}</small></article><article><span>Town growth</span><b>+${(population?.births ?? 0) + (population?.arrivals ?? 0)}</b><small>${population?.births ?? 0} births | ${population?.arrivals ?? 0} arrivals | ${population?.deaths ?? 0} deaths</small></article><article><span>Housing</span><b>${housing?.residents ?? value.residents.length} / ${housing?.capacity ?? 0}</b><small>${housing?.available ?? 0} spaces | ${housing?.activeLeases ?? 0} households</small></article><article><span>Apartments</span><b>${housing?.apartmentResidents ?? 0} / ${housing?.apartmentCapacity ?? 0}</b><small>${housing?.apartments ?? 0} buildings | ${housing?.sharedBuildings ?? 0} shared</small></article><article><span>Town net worth</span><b>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</b><small>${formatCad(economy?.totalDebt)} debt</small></article><article><span>Goods in shops</span><b>${Math.round(economy?.stockUnits ?? 0).toLocaleString()}</b><small>${economy?.catalogItems ?? 0} catalog items</small></article><article><span>Social activity</span><b>${relationships?.interactions ?? 0}</b><small>${relationships?.pairs ?? 0} relationship pairs</small></article><article><span>Story events</span><b>${value.townEvents?.length ?? value.events.length}</b><small>${value.conversations.length} conversations</small></article><article><span>Model calls</span><b>${value.usage.calls}</b><small>${value.usage.totalTokens.toLocaleString()} tokens</small></article></div>
+    <div class="analytics-kpis"><article><span>Population plan</span><b>${population?.living ?? value.residents.length} / ${population?.target ?? 24}</b><small>${stageCounts.map((item) => `${item.value} ${item.label.toLowerCase()}`).join(" | ")}</small></article><article><span>Town growth</span><b>+${(population?.births ?? 0) + (population?.arrivals ?? 0)}</b><small>${population?.births ?? 0} births | ${population?.arrivals ?? 0} arrivals | ${population?.deaths ?? 0} deaths</small></article><article><span>Housing</span><b>${housing?.residents ?? value.residents.length} / ${housing?.capacity ?? 0}</b><small>${value.housingRecovery?.shelterResidents ?? 0} in shelter | ${value.housingRecovery?.plans.length ?? 0} recovery plans</small></article><article><span>Care coverage</span><b>${care?.dependents ?? 0}</b><small>${care?.scheduledBlocks ?? 0} scheduled handoffs</small></article><article><span>Active health</span><b>${health?.activeConditions ?? 0}</b><small>${health?.recovering ?? 0} recovering | ${health?.contagious ?? 0} contagious</small></article><article><span>Resident median</span><b>${formatCad(indicators?.residentMedianWealth)}</b><small>Gini ${indicators?.wealthGini?.toFixed(3) ?? "--"}</small></article><article><span>Retail volume</span><b>${formatCad(indicators?.retailVolume)}</b><small>CPI ${indicators?.cpi?.toFixed(1) ?? "pending"}</small></article><article><span>Employment</span><b>${indicators?.employmentRate?.toFixed(1) ?? "--"}%</b><small>${indicators?.debtDelinquencyRate?.toFixed(1) ?? "--"}% debt delinquency</small></article><article><span>Business profit</span><b>${formatCad(indicators?.businessProfit)}</b><small>${formatCad(indicators?.businessRevenue)} revenue</small></article><article><span>Goods in shops</span><b>${Math.round(economy?.stockUnits ?? 0).toLocaleString()}</b><small>${economy?.catalogItems ?? 0} catalog items</small></article><article><span>Social activity</span><b>${relationships?.interactions ?? 0}</b><small>${relationships?.pairs ?? 0} relationship pairs</small></article><article><span>Story evidence</span><b>${value.ledgerVerification?.participantLinks ?? 0}</b><small>${value.ledgerVerification?.available ? `${value.ledgerVerification.verified} verified` : "legacy ledger"}</small></article><article><span>Model calls</span><b>${value.usage.calls}</b><small>${circuitCount} open circuit${circuitCount === 1 ? "" : "s"}</small></article></div>
     <div class="analytics-grid">
       <section><header><span>Population</span><b>Life stages</b></header>${barChart(stageCounts)}</section>
       <section><header><span>Housing</span><b>Occupied and available capacity</b></header>${barChart([{ label: "Residents", value: housing?.residents ?? value.residents.length }, { label: "Available", value: housing?.available ?? 0 }, { label: "Apartment residents", value: housing?.apartmentResidents ?? 0 }, { label: "Apartment spaces", value: Math.max(0, (housing?.apartmentCapacity ?? 0) - (housing?.apartmentResidents ?? 0)) }])}</section>
@@ -798,6 +836,7 @@ function renderAnalytics(value: KrabvilleState): string {
       <section><header><span>Mood</span><b>Residents now</b></header>${barChart(moodCounts)}</section>
       <section><header><span>Occupancy</span><b>Where everyone is</b></header>${barChart(locations)}</section>
       <section class="wide"><header><span>Economy</span><b>Daily change from first sample</b></header>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Town financial change over time", true)}</section>
+      <section class="wide"><header><span>Working economy</span><b>Retail, income, and business results</b></header>${lineChart([{ label: "Retail", color: "#63d8e3", values: metricHistory.map((point) => point.retailVolume) }, { label: "Profit", color: "#60d394", values: metricHistory.map((point) => point.businessProfit) }, { label: "Disposable", color: "#ffc857", values: metricHistory.map((point) => point.disposableIncome) }], "Working economy over the season")}</section>
       <section><header><span>Inventory</span><b>Units by category</b></header>${barChart((value.analytics?.inventoryByCategory ?? []).slice(0, 12).map((item) => ({ label: item.category, value: item.units })))}</section>
       <section><header><span>Goods flow</span><b>Movement by type</b></header>${barChart((value.analytics?.movements ?? []).map((item) => ({ label: item.type, value: item.units })))}</section>
       <section><header><span>Relationships</span><b>Town averages</b></header>${barChart([{ label: "Affinity", value: relationships?.affinity ?? 0 }, { label: "Trust", value: relationships?.trust ?? 0 }, { label: "Familiarity", value: relationships?.familiarity ?? 0 }, { label: "Tension", value: relationships?.tension ?? 0 }])}</section>
@@ -887,9 +926,11 @@ function renderExplorer(section: string): string {
   const history = economy?.history ?? [];
   const accounts = economy?.accounts ?? [];
   const businesses = economy?.businesses ?? [];
+  const indicators = economy?.indicators;
+  const metricHistory = economy?.metricHistory ?? [];
   return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town net worth across ${accounts.length} resident, household, and business accounts</p></div>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Krabville financial change", true)}</div>
-    <div class="metric-grid bank-metrics"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article><article><span>Business revenue</span><b>${formatCad(economy?.businessRevenue)}</b></article><article><span>Services</span><b>${formatCad(economy?.serviceRevenue)}</b></article><article><span>Transactions</span><b>${economy?.transactionCount ?? 0}</b></article><article><span>Money moved</span><b>${formatCad(economy?.transactionVolume)}</b></article><article><span>Goods sold</span><b>${Math.round(economy?.goodsSold ?? 0)}</b></article><article><span>Stock units</span><b>${Math.round(economy?.stockUnits ?? 0)}</b></article><article><span>Barters</span><b>${economy?.barters ?? 0}</b></article><article><span>Phone calls</span><b>${economy?.phoneCalls ?? 0}</b></article></div>
-    <div class="bank-analysis"><section><header><span>Account comparison</span><b>Largest balances</b></header>${barChart(accounts.slice().sort((left, right) => right.balance - left.balance).slice(0, 12).map((account) => ({ label: account.owner, value: Math.max(0, account.balance) })), formatCad)}</section><section><header><span>Business comparison</span><b>Operating cash</b></header>${barChart(businesses.slice().sort((left, right) => (right.cash ?? 0) - (left.cash ?? 0)).map((business) => ({ label: business.name, value: business.cash ?? 0 })), formatCad)}</section><section><header><span>Market prices</span><b>Average basket over days</b></header>${lineChart([{ label: "Average item", color: "#ffc857", values: (state.analytics?.prices ?? []).map((point) => point.averagePrice) }, { label: "Units sold", color: "#63d8e3", values: (state.analytics?.prices ?? []).map((point) => point.unitsSold) }], "Average prices and units sold")}</section></div>
+    <div class="metric-grid bank-metrics economy-indicators"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Resident median</span><b>${formatCad(indicators?.residentMedianWealth ?? economy?.medianNetWorth)}</b></article><article><span>Disposable / resident</span><b>${formatCad(indicators?.disposableIncome)}</b></article><article><span>CPI</span><b>${indicators?.cpi?.toFixed(1) ?? "Pending"}</b></article><article><span>Retail volume</span><b>${formatCad(indicators?.retailVolume)}</b></article><article><span>Business profit</span><b>${formatCad(indicators?.businessProfit)}</b></article><article><span>Employment</span><b>${indicators?.employmentRate?.toFixed(1) ?? "--"}%</b></article><article><span>Debt delinquency</span><b>${indicators?.debtDelinquencyRate?.toFixed(1) ?? "--"}%</b></article><article><span>Wealth inequality</span><b>${indicators?.wealthGini?.toFixed(3) ?? "--"}</b></article><article><span>Shelter residents</span><b>${indicators?.shelterOccupancy ?? 0}</b></article></div>
+    <div class="bank-analysis"><section><header><span>Account comparison</span><b>Largest balances</b></header>${barChart(accounts.slice().sort((left, right) => right.balance - left.balance).slice(0, 12).map((account) => ({ label: account.owner, value: Math.max(0, account.balance) })), formatCad)}</section><section><header><span>Business comparison</span><b>Operating cash</b></header>${barChart(businesses.slice().sort((left, right) => (right.cash ?? 0) - (left.cash ?? 0)).map((business) => ({ label: business.name, value: business.cash ?? 0 })), formatCad)}</section><section><header><span>Market prices</span><b>CPI and retail volume</b></header>${lineChart([{ label: "CPI", color: "#ffc857", values: metricHistory.map((point) => point.cpi ?? 100) }, { label: "Retail volume", color: "#63d8e3", values: metricHistory.map((point) => point.retailVolume) }], "Consumer prices and retail volume")}</section><section><header><span>Business activity</span><b>Revenue and profit by day</b></header>${lineChart([{ label: "Revenue", color: "#60d394", values: metricHistory.map((point) => point.businessRevenue) }, { label: "Profit", color: "#b88cff", values: metricHistory.map((point) => point.businessProfit) }], "Business revenue and profit")}</section><section><header><span>Resident economy</span><b>Median wealth and disposable income</b></header>${lineChart([{ label: "Median wealth", color: "#63d8e3", values: metricHistory.map((point) => point.residentMedianWealth ?? 0) }, { label: "Disposable", color: "#ffc857", values: metricHistory.map((point) => point.disposableIncome) }], "Resident wealth and disposable income")}</section></div>
     <div class="section-label"><span>All resident, household, and business accounts</span><b>${accounts.length}</b></div>
     <div class="bank-ledger">${accounts.map((account) => account.residentSlug
       ? `<button type="button" class="${h(account.ownerKind)}" data-resident="${h(account.residentSlug)}"><span class="account-mark">${h(account.ownerKind.slice(0, 1).toUpperCase())}</span><span><b>${h(account.owner)}</b><small>${h(account.name)} | ${h(account.type)} | ${h(account.status)}</small></span><em>${formatCad(account.balance)}</em></button>`
@@ -992,9 +1033,25 @@ function render(value: KrabvilleState): void {
   if (lastEvent) setTicker(lastEvent.type, lastEvent.payload);
 }
 
+const EVENT_LABELS: Record<string, string> = {
+  goal_change: "Goal progress",
+  purchase: "Purchase",
+  health: "Health update",
+  care_handoff: "Care handoff",
+  housing: "Housing update",
+  relationship_change: "Relationship update",
+  verified_chronicle: "Verified chronicle",
+};
+
 function setTicker(type: string, payload: Record<string, unknown>): void {
-  const summary = payload.summary ?? payload.title ?? payload.activity ?? payload.status ?? payload.kind;
-  byId("live-ticker").textContent = summary ? `${type.replaceAll("_", " ")}: ${String(summary)}` : `${type.replaceAll("_", " ")} recorded in the town ledger.`;
+  const label = EVENT_LABELS[type] ?? titleCase(type);
+  const summary = payload.summary ?? payload.title ?? payload.activity ?? payload.status ?? payload.kind ?? payload.resident;
+  byId("live-ticker").textContent = summary ? `${label}: ${String(summary)}` : `${label} recorded in the town ledger.`;
+}
+
+function handleLiveEvent(type: string, payload: Record<string, unknown>): void {
+  setTicker(type, payload);
+  if (!document.hidden) void refresh().then(() => setTicker(type, payload));
 }
 
 async function refresh(): Promise<void> {
@@ -1095,6 +1152,15 @@ async function openResident(slug: string): Promise<void> {
     const homeInventory = detail.homeInventory ?? [];
     const relationshipRows = detail.relationships.slice().sort((left, right) => (right.affinity + right.trust - right.tension) - (left.affinity + left.trust - left.tension));
     const finance = detail.finances;
+    const decisionFactors = detail.decisionFactors ?? [];
+    const lifeGoals = detail.lifeGoals ?? [];
+    const goalEvidence = [
+      ...(detail.goalEvidence ?? detail.goals.flatMap((goal) => goal.evidence ?? [])),
+      ...lifeGoals.flatMap((goal) => goal.evidence),
+    ];
+    const conditions = detail.health?.conditionDetails ?? [];
+    const careSchedules = detail.health?.careSchedules ?? [];
+    const housing = detail.housingRecovery;
     byId("dossier-name").textContent = detail.name;
     byId("dossier-body").innerHTML = `
       <section class="resident-summary"><span style="--resident-color:${h(detail.color)}"></span><div><b>${h(detail.role)}${detail.lifeStage ? ` | ${h(detail.lifeStage)}` : ""}</b><p>${h(detail.activity)} at ${h(detail.location)}</p></div><em>${h(detail.mood)}</em></section>
@@ -1108,9 +1174,10 @@ async function openResident(slug: string): Promise<void> {
         <div class="thought-band"><span>In their head</span><p>${h(detail.pondering?.thought || detail.publicThought)}</p><small>${h(detail.intention)}</small></div>
         <div class="trait-grid">${Object.entries(detail.traits).map(([trait, score]) => `<div><span>${h(titleCase(trait))}</span><b>${Math.round(score)}</b></div>`).join("")}</div>
         <div class="section-label"><span>Likely decisions</span><b>Top ${forecasts.length}</b></div>${renderDecisionForecasts(forecasts)}
+        ${decisionFactors.length ? `<div class="section-label"><span>Why this choice</span><b>${decisionFactors.length} factors</b></div><div class="factor-list">${decisionFactors.map((factor) => `<article class="${factor.weight >= 0 ? "positive" : "negative"}"><span>${h(factor.kind)}</span><b>${h(titleCase(factor.key))}</b><em>${factor.weight >= 0 ? "+" : ""}${factor.weight.toFixed(1)}</em><p>${h(factor.explanation)}</p></article>`).join("")}</div>` : ""}
       </section>
 
-      <section class="detail-section dossier-section" id="dossier-needs"><div class="section-label"><span>Needs, high is healthy</span><b>${h(detail.mood)}</b></div>${displayedNeeds(detail).map(([label, value, key]) => needBar(label, value, key)).join("")}<div class="section-label"><span>Wants and aspirations</span><b>${wants.length}</b></div>${renderNotes(wants, "No public wants have formed yet.")}</section>
+      <section class="detail-section dossier-section" id="dossier-needs"><div class="section-label"><span>Needs, high is healthy</span><b>${h(detail.mood)}</b></div>${displayedNeeds(detail).map(([label, value, key]) => needBar(label, value, key)).join("")}<div class="section-label"><span>Wants and aspirations</span><b>${wants.length}</b></div>${renderNotes(wants, "No public wants have formed yet.")}<div class="section-label"><span>Long-term life goals</span><b>${lifeGoals.length}</b></div><div class="life-goal-list" id="dossier-life-goals">${lifeGoals.map((goal) => `<article><span>${h(titleCase(goal.category))} | ${h(titleCase(goal.status))}</span><b>${h(goal.description)}</b><div class="goal-meter"><i style="width:${Math.max(3, goal.progress)}%"></i></div><small>${goal.progress}% complete | ${goal.evidenceCount} connected action${goal.evidenceCount === 1 ? "" : "s"}</small></article>`).join("") || `<div class="empty-state">No long-term goal has been published.</div>`}</div><div class="section-label"><span>Connected goal evidence</span><b>${goalEvidence.length}</b></div>${renderLedgerEntries(goalEvidence.map((evidence) => ({ id: evidence.id ?? undefined, tick: evidence.tick, category: `${evidence.goalScope === "life" ? "Life goal" : evidence.kind}${evidence.progressDelta ? ` | +${evidence.progressDelta}%` : ""}`, title: evidence.summary, verificationStatus: evidence.verified ? "verified" : "unverified" })), "Actions connected to goals will appear here.")}</section>
 
       <section class="detail-section dossier-section" id="dossier-family"><div class="section-label"><span>Family and household</span><b>${detail.family?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Household</span><b>${h(detail.household ?? "Not yet recorded")}</b></article></div>${detail.family?.length ? `<div class="note-list">${detail.family.map((member) => `<article><span>${h(member.relation)}</span><h4>${h(member.name)}</h4><p>${h([member.lifeStage, member.household].filter(Boolean).join(" | "))}</p></article>`).join("")}</div>` : `<div class="empty-state">No public kinship record is available for this resident.</div>`}</section>
 
@@ -1120,13 +1187,13 @@ async function openResident(slug: string): Promise<void> {
 
       <section class="detail-section dossier-section" id="dossier-secrets"><div class="section-label"><span>Secrets</span><b>${detail.secrets?.length ?? 0}</b></div>${renderNotes(detail.secrets, "No spectator-visible secrets yet.")}<div class="section-label"><span>Beliefs and gossip</span><b>${detail.beliefs?.length ?? 0}</b></div>${renderNotes(detail.beliefs, "No conflicting beliefs have formed yet.")}</section>
 
-      <section class="detail-section dossier-section" id="dossier-health"><div class="section-label"><span>Health and care</span><b>${h(detail.health?.status ?? "No current record")}</b></div><div class="fact-grid"><article><span>Conditions</span><b>${h(detail.health?.conditions?.join(", ") || "None published")}</b></article><article><span>Caregiver</span><b>${h(detail.health?.caregiver ?? "Independent")}</b></article><article><span>Care plan</span><b>${h(detail.health?.care?.join(", ") || "None")}</b></article><article><span>Stress</span><b>${detail.health?.stress ?? "--"}</b></article></div></section>
+      <section class="detail-section dossier-section" id="dossier-health"><div class="section-label"><span>Health and care</span><b>${h(detail.health?.status ?? "No current record")}</b></div><div class="fact-grid"><article><span>Conditions</span><b>${h(detail.health?.conditions?.join(", ") || "No active condition")}</b></article><article><span>Caregiver</span><b>${h(detail.health?.caregiver ?? "Independent")}</b></article><article><span>Care coverage</span><b>${h(detail.health?.careStatus ?? "No care required")}</b></article><article><span>Stress</span><b>${detail.health?.stress ?? "Not published"}</b></article></div>${conditions.length ? `<div class="section-label"><span>Active conditions</span><b>${conditions.length}</b></div><div class="condition-list">${conditions.map((condition) => `<article><span>${h(condition.statusLabel ?? titleCase(condition.status))} | ${h(condition.severityLabel ?? `Severity ${condition.severity}`)}</span><b>${h(condition.name)}</b><p>${h(condition.typeLabel ?? titleCase(condition.type))} | ${h(condition.contagionLabel ?? (condition.contagious ? "Contagious" : "Not contagious"))}${condition.provider ? ` | ${h(condition.provider)}` : ""}${condition.treatmentCost ? ` | ${formatCad(condition.treatmentCost)}` : ""}</p></article>`).join("")}</div>` : ""}<div class="section-label"><span>Care schedule</span><b>${careSchedules.length}</b></div><div class="care-schedule">${careSchedules.map((schedule) => `<article><span>${h(schedule.scheduleLabel ?? (schedule.day === null || schedule.day === undefined ? "Schedule pending" : `Day ${schedule.day + 1} | ${formatTime(schedule.startMinute ?? 0)}-${formatTime(schedule.endMinute ?? 0)}`))}</span><b>${h(schedule.caregiver ?? "Caregiver pending")}</b><p>${h(schedule.typeLabel ?? titleCase(schedule.type))} | ${h(schedule.statusLabel ?? titleCase(schedule.status))}${schedule.costPerDay ? ` | ${formatCad(schedule.costPerDay)} per day` : ""}</p></article>`).join("") || `<div class="empty-state">No dependent care schedule is required.</div>`}</div></section>
 
       <section class="detail-section dossier-section" id="dossier-career"><div class="section-label"><span>Career</span><b>${h(detail.career?.status ?? "Current")}</b></div><div class="fact-grid"><article><span>Role</span><b>${h(detail.career?.title ?? detail.role)}</b></article><article><span>Employer</span><b>${h(detail.career?.employer ?? detail.workplace)}</b></article><article><span>Schedule</span><b>${h(detail.career?.schedule ?? detail.routine)}</b></article><article><span>Daily income</span><b>${formatCad(detail.career?.income)}</b></article></div></section>
 
       <section class="detail-section dossier-section" id="dossier-finances"><div class="section-label"><span>Finances and net worth</span><b>${formatCad(finance?.netWorth)}</b></div><div class="resident-finance-chart">${sparkline(finance?.history?.map((point) => point.netWorth) ?? [])}</div><div class="metric-grid"><article><span>Cash</span><b>${formatCad(finance?.cash)}</b></article><article><span>Chequing</span><b>${formatCad(finance?.chequing)}</b></article><article><span>Savings</span><b>${formatCad(finance?.savings)}</b></article><article><span>Investments</span><b>${formatCad(finance?.investments)}</b></article><article><span>Debt</span><b>${formatCad(finance?.debt)}</b></article><article><span>Net worth</span><b>${formatCad(finance?.netWorth)}</b></article></div><div class="section-label"><span>Accounts</span><b>${finance?.accounts?.length ?? 0}</b></div><div class="account-list">${finance?.accounts?.map((account) => `<article><span>${h(account.type)} | ${h(account.status)}</span><b>${h(account.name)}</b><em>${formatCad(account.balance)}</em></article>`).join("") || `<div class="empty-state">No accounts.</div>`}</div><div class="section-label"><span>Transactions</span><b>${detail.transactions?.length ?? 0}</b></div>${renderLedgerEntries((detail.transactions ?? []).map((entry) => ({ ...entry, title: entry.description })), "No posted transactions yet.")}</section>
 
-      <section class="detail-section dossier-section" id="dossier-property"><div class="section-label"><span>Home and property</span><b>${detail.properties?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Workplace</span><b>${h(detail.workplace)}</b></article></div>${detail.properties?.map((property) => `<button class="property-row" data-property="${h(property.slug ?? "")}"><span>${h(property.type ?? "Property")}</span><b>${h(property.name)}</b><small>${formatCad(property.value)}</small></button>`).join("") ?? ""}<div class="section-label"><span>Clothing and outfit</span><b>${clothing.length}</b></div>${inventoryGrid(clothing)}<div class="section-label"><span>Carried now</span><b>${carried.length}</b></div>${inventoryGrid(carried)}<div class="section-label"><span>Stocked at home</span><b>${homeInventory.length}</b></div>${inventoryGrid(homeInventory)}</section>
+      <section class="detail-section dossier-section" id="dossier-property"><div class="section-label"><span>Home and property</span><b>${detail.properties?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Workplace</span><b>${h(detail.workplace)}</b></article><article><span>Housing state</span><b>${h(housing?.stateLabel ?? (housing?.inShelter ? `Temporary shelter | ${housing.shelter}` : "Housed"))}</b></article><article><span>Recovery</span><b>${h(housing?.recoveryLabel ?? housing?.trackingLabel ?? "Recovery data unavailable")}</b></article></div>${housing?.plans.length ? `<div class="housing-recovery"><span>${h(housing.plans[0]?.stageLabel ?? titleCase(housing.plans[0]?.stage ?? "recovery"))} | ${h(housing.plans[0]?.stabilityLabel ?? `${housing.plans[0]?.stableDays ?? 0} stable days`)}</span><b>${h(housing.plans[0]?.nextStep)}</b><p>${housing.plans[0]?.arrearsDays ? `${housing.plans[0].arrearsDays} arrears days | ` : ""}${housing.plans[0]?.failedAttempts ?? 0} failed recovery attempts</p></div>` : ""}${detail.properties?.map((property) => `<button class="property-row" data-property="${h(property.slug ?? "")}"><span>${h(property.type ?? "Property")}</span><b>${h(property.name)}</b><small>${formatCad(property.value)}</small></button>`).join("") ?? ""}<div class="section-label"><span>Clothing and outfit</span><b>${clothing.length}</b></div>${inventoryGrid(clothing)}<div class="section-label"><span>Carried now</span><b>${carried.length}</b></div>${inventoryGrid(carried)}<div class="section-label"><span>Stocked at home</span><b>${homeInventory.length}</b></div>${inventoryGrid(homeInventory)}</section>
 
       <section class="detail-section dossier-section" id="dossier-memory"><div class="section-label"><span>Recent memories</span><b>${detail.memories.length}</b></div><div class="memory-list">${detail.memories.slice(0, 16).map((memory) => `<article><span>${h(memory.kind)} | salience ${memory.salience}</span><p>${h(memory.content)}</p></article>`).join("") || `<div class="empty-state">No retained memories yet.</div>`}</div></section>
 
@@ -1188,12 +1255,19 @@ async function showSeason(id: number): Promise<void> {
   const detail = byId("archive-detail");
   detail.innerHTML = `<div class="loading-state">Opening chronicle...</div>`;
   const payload = await fetchSeason(id);
+  const archive = payload as typeof payload & {
+    ledger?: LedgerEntry[];
+    epilogues?: LedgerEntry[];
+    ledgerVerification?: KrabvilleState["ledgerVerification"];
+  };
   const season = payload.season;
   const report = payload.report;
   detail.innerHTML = `
-    <div class="archive-title"><span>Season ${h(season.number)}</span><h3>${h(report?.headline ?? "A week around the Lagoon")}</h3><p>Commitment ${h(String(season.seedCommitment ?? "").slice(0, 24))}...</p></div>
+    <div class="archive-title"><span>Season ${h(season.number)}</span><h3>${h(report?.headline ?? "A week around the Lagoon")}</h3><p>Commitment ${h(String(season.seedCommitment ?? "").slice(0, 24))}...</p><small>${archive.ledgerVerification?.available ? `${archive.ledgerVerification.verified} verified ledger records | ${archive.ledgerVerification.participantLinks} participant links` : "Authoritative legacy ledger | verification metadata pending"}</small></div>
     ${report?.poster ? `<img src="${h(report.poster)}" alt="Illustrated Season ${h(season.number)} chronicle" />` : ""}
-    <div class="archive-days">${payload.chronicles.map((chronicle) => `<article><span>Day ${Number(chronicle.day) + 1}</span><h4>${h(chronicle.title)}</h4><p>${h(chronicle.narrative)}</p></article>`).join("")}</div>
+    <div class="archive-days">${payload.chronicles.map((chronicle) => `<article><span>Day ${Number(chronicle.day) + 1} | ${h(chronicle.verificationStatus ?? "legacy")}</span><h4>${h(chronicle.title)}</h4><p>${h(chronicle.narrative)}</p></article>`).join("")}</div>
+    ${archive.epilogues?.length ? `<div class="section-label"><span>Season epilogue</span><b>${archive.epilogues.length}</b></div>${renderLedgerEntries(archive.epilogues, "")}` : ""}
+    <div class="section-label"><span>Factual ledger</span><b>${archive.ledger?.length ?? 0}</b></div>${renderLedgerEntries(archive.ledger ?? [], "No ledger records are available for this season.")}
   `;
 }
 
@@ -1305,10 +1379,17 @@ window.addEventListener("popstate", () => {
   applyHashRoute();
 });
 
-connectEvents((type, payload) => {
-  setTicker(type, payload);
-  if (!document.hidden) void refresh();
-});
+const liveEvents = connectEvents(handleLiveEvent);
+for (const type of V22_EVENT_KINDS) {
+  liveEvents.addEventListener(type, (event) => {
+    try {
+      const value = JSON.parse((event as MessageEvent).data) as { payload?: Record<string, unknown> };
+      handleLiveEvent(type, value.payload ?? {});
+    } catch {
+      handleLiveEvent(type, {});
+    }
+  });
+}
 
 setInterval(() => {
   if (!document.hidden) void refresh();

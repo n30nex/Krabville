@@ -37,6 +37,7 @@ from .db import (
     retrieve_memories,
     transaction,
 )
+from .history_v214 import finalize_day_goals, finalize_season_goals, repair_childcare
 from .runtime_v2 import (
     apply_lifecycle_boundary,
     bootstrap_population,
@@ -59,6 +60,7 @@ from .simulation_v2 import (
 TICKS_PER_DAY = 288
 DAYS_PER_SEASON = 7
 TARGET_TICKS = TICKS_PER_DAY * DAYS_PER_SEASON
+MAX_SEASONS = 20
 POLL_OPEN_TICK = 24
 POLL_CLOSE_TICK = 264
 
@@ -142,18 +144,29 @@ def _choose_catalyst(
     return _rng(seed_hex, "catalyst", day).choice(candidates or list(MAJOR_EVENTS))
 
 
-def _participant_slugs(connection: sqlite3.Connection, seed_hex: str, day: int) -> list[str]:
-    slugs = [
-        str(row[0])
+def _participant_slugs(
+    connection: sqlite3.Connection,
+    seed_hex: str,
+    day: int,
+    event_slug: str,
+) -> list[str]:
+    residents = [
+        row
         for row in connection.execute(
             """
-            SELECT r.slug FROM residents r
+            SELECT r.slug,l.current_stage FROM residents r
             JOIN resident_lifecycle l ON l.resident_id=r.id
             WHERE l.alive=1 ORDER BY r.id
             """
         )
     ]
-    return _rng(seed_hex, "participants", day).sample(slugs, min(2, len(slugs)))
+    if event_slug in {"old-flame", "unexpected-proposal"}:
+        adults = [str(row["slug"]) for row in residents if row["current_stage"] in {"adult", "senior"}]
+        teens = [str(row["slug"]) for row in residents if row["current_stage"] == "teen"]
+        eligible = adults if len(adults) >= 2 else teens
+    else:
+        eligible = [str(row["slug"]) for row in residents]
+    return _rng(seed_hex, "participants", day, event_slug).sample(eligible, min(2, len(eligible)))
 
 
 def _queue_job(
@@ -184,6 +197,60 @@ def _queue_job(
     return int(cursor.lastrowid)
 
 
+def _ensure_life_goals(
+    connection: sqlite3.Connection,
+    season_id: int,
+    tick: int,
+) -> list[dict[str, Any]]:
+    templates = {
+        "baby": ("family", "Grow safely with dependable care."),
+        "child": ("growth", "Learn, play, and build a secure family life."),
+        "teen": ("independence", "Become independent without losing trusted relationships."),
+        "adult": ("life", "Build a stable, meaningful life in Krabville."),
+        "senior": ("legacy", "Leave a useful legacy and sustain close relationships."),
+    }
+    changes: list[dict[str, Any]] = []
+    for row in connection.execute(
+        """
+        SELECT resident.id,resident.slug,lifecycle.current_stage
+        FROM residents resident JOIN resident_lifecycle lifecycle ON lifecycle.resident_id=resident.id
+        WHERE lifecycle.alive=1 ORDER BY resident.id
+        """
+    ):
+        category, description = templates[str(row["current_stage"])]
+        current = connection.execute(
+            "SELECT * FROM life_goals WHERE resident_id=? AND status='active' ORDER BY id LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+        if current and str(current["category"]) != category:
+            evidence = loads(current["evidence_json"], [])
+            evidence.append({"seasonId": season_id, "tick": tick, "type": "stage_transition"})
+            connection.execute(
+                """
+                UPDATE life_goals SET status='complete',progress=100,evidence_json=?,
+                  completed_season_id=?,completed_tick=? WHERE id=?
+                """,
+                (dumps(evidence[-48:]), season_id, tick, current["id"]),
+            )
+            changes.append({"resident": row["slug"], "goalId": int(current["id"]), "status": "complete"})
+            current = None
+        if not current:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO life_goals(
+                  resident_id,description,category,created_season_id,created_tick
+                ) VALUES(?,?,?,?,?)
+                """,
+                (row["id"], description, category, season_id, tick),
+            )
+            if cursor.rowcount:
+                changes.append({
+                    "resident": row["slug"], "goalId": int(cursor.lastrowid),
+                    "scope": "life", "status": "active",
+                })
+    return changes
+
+
 def _day_event(
     connection: sqlite3.Connection,
     season: sqlite3.Row,
@@ -191,7 +258,7 @@ def _day_event(
     catalyst_slug: str | None,
 ) -> EventTemplate:
     event = _choose_catalyst(connection, season["seed_hex"], day, catalyst_slug)
-    participants = _participant_slugs(connection, season["seed_hex"], day)
+    participants = _participant_slugs(connection, season["seed_hex"], day, event.slug)
     cursor = connection.execute(
         """
         INSERT INTO town_events(
@@ -246,16 +313,27 @@ def _day_event(
         a, b = sorted((resident_map[participants[0]], resident_map[participants[1]]))
         affinity = 2 if event.category in {"social", "civic", "strange"} else 1
         tension = 2 if event.slug in {"cafe-mixup", "quiet-hour", "time-slip"} else 0
+        affection = 2 if event.category == "social" else 0
+        respect = 2 if event.category in {"civic", "environmental"} else 1
         connection.execute(
             """
             UPDATE relationships SET affinity=MIN(100,affinity+?),
               trust=MIN(100,trust+1), tension=MIN(100,tension+?),
+              affection=MIN(100,affection+?),respect=MIN(100,respect+?),
               familiarity=MIN(100,familiarity+3), interactions=interactions+1,
               last_interaction_tick=?
             WHERE season_id=? AND resident_a=? AND resident_b=?
             """,
-            (affinity, tension, day * TICKS_PER_DAY, season["id"], a, b),
+            (affinity, tension, affection, respect, day * TICKS_PER_DAY, season["id"], a, b),
         )
+        emit(connection, int(season["id"]), day * TICKS_PER_DAY, "relationship_change", {
+            "residents": participants,
+            "cause": event.slug,
+            "deltas": {
+                "affinity": affinity, "trust": 1, "tension": tension,
+                "affection": affection, "respect": respect,
+            },
+        })
     return event
 
 
@@ -270,6 +348,8 @@ def start_season(
         if latest and latest["status"] in {"running", "paused", "closing"}:
             raise RuntimeError("a season is already active")
         number = int(latest["number"]) + 1 if latest else 1
+        if number > MAX_SEASONS:
+            raise RuntimeError("the twenty-season simulation is complete")
         if opening_slug is None and latest:
             opening_slug = latest["next_catalyst_slug"]
         prior_season_id = int(latest["id"]) if latest else None
@@ -292,7 +372,9 @@ def start_season(
         season_id = int(cursor.lastrowid)
         initialize_resident_state(connection, season_id, prior_season_id)
         initialize_v2_season_state(connection, season_id, prior_season_id, seed_hex)
+        _ensure_life_goals(connection, season_id, 0)
         seed_commerce(connection)
+        repair_childcare(connection, season_id, 0)
         season = connection.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
         event = _day_event(connection, season, 0, opening_slug)
         for resident in connection.execute(
@@ -775,6 +857,505 @@ def _place_inside(
     )
 
 
+def _sync_resident_wants(
+    connection: sqlite3.Connection,
+    season_id: int,
+    resident_id: int,
+    tick: int,
+    generated: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    connection.execute(
+        """
+        UPDATE resident_wants SET status='abandoned',resolved_tick=?
+        WHERE season_id=? AND resident_id=? AND kind='short_term'
+          AND status IN ('active','pursuing','blocked')
+          AND expires_tick IS NOT NULL AND expires_tick<=?
+        """,
+        (tick, season_id, resident_id, tick),
+    )
+    for want in generated:
+        source_need = str(want.get("sourceNeed", ""))
+        action = str(want.get("kind", ""))
+        expires = tick + max(1, round(float(want.get("expiresInMinutes", 180)) / 5))
+        existing = connection.execute(
+            """
+            SELECT id FROM resident_wants
+            WHERE season_id=? AND resident_id=? AND kind='short_term'
+              AND source_need=? AND status IN ('active','pursuing','blocked')
+            ORDER BY id DESC LIMIT 1
+            """,
+            (season_id, resident_id, source_need),
+        ).fetchone()
+        if existing:
+            connection.execute(
+                """
+                UPDATE resident_wants SET description=?,priority=?,action_key=?,
+                  expires_tick=?,status=CASE WHEN status='blocked' THEN 'active' ELSE status END
+                WHERE id=?
+                """,
+                (
+                    str(want.get("label", action))[:300],
+                    int(round(max(0, min(100, float(want.get("priority", 0)))))),
+                    action,
+                    expires,
+                    existing["id"],
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO resident_wants(
+                  season_id,resident_id,kind,description,status,priority,progress,
+                  created_tick,source_need,action_key,expires_tick
+                ) VALUES(?,?,'short_term',?,'active',?,0,?,?,?,?)
+                """,
+                (
+                    season_id,
+                    resident_id,
+                    str(want.get("label", action))[:300],
+                    int(round(max(0, min(100, float(want.get("priority", 0)))))),
+                    tick,
+                    source_need,
+                    action,
+                    expires,
+                ),
+            )
+    return [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT id,description,status,priority,progress,
+                   source_need AS sourceNeed,action_key AS actionKey
+            FROM resident_wants
+            WHERE season_id=? AND resident_id=? AND status IN ('active','pursuing')
+            ORDER BY priority DESC,id LIMIT 8
+            """,
+            (season_id, resident_id),
+        )
+    ]
+
+
+def _decision_context(
+    connection: sqlite3.Connection,
+    season: sqlite3.Row,
+    row: sqlite3.Row,
+    tick: int,
+    hour: float,
+    needs: dict[str, float],
+    wants: list[dict[str, Any]],
+    weather: dict[str, Any],
+    event: sqlite3.Row | None,
+    nearby: int,
+) -> dict[str, Any]:
+    resident_id = int(row["id"])
+    season_id = int(season["id"])
+    goals = [
+        dict(item)
+        for item in connection.execute(
+            """
+            SELECT id,scope,description,status,progress,
+                   CASE scope WHEN 'daily' THEN 85 ELSE 70 END priority
+            FROM goals WHERE season_id=? AND resident_id=? AND status='active'
+            ORDER BY CASE scope WHEN 'daily' THEN 0 ELSE 1 END,id LIMIT 8
+            """,
+            (season_id, resident_id),
+        )
+    ]
+    goals.extend(
+        dict(item)
+        for item in connection.execute(
+            """
+            SELECT id,'life' scope,description,status,progress,65 priority
+            FROM life_goals WHERE resident_id=? AND status='active' ORDER BY id LIMIT 2
+            """,
+            (resident_id,),
+        )
+    )
+    relationships = [
+        dict(item)
+        for item in connection.execute(
+            """
+            SELECT affinity,trust,tension,familiarity,attraction,affection,respect,
+                   commitment,resentment
+            FROM relationships WHERE season_id=? AND (resident_a=? OR resident_b=?)
+            ORDER BY interactions DESC,last_interaction_tick DESC LIMIT 8
+            """,
+            (season_id, resident_id, resident_id),
+        )
+    ]
+    memories = [
+        dict(item)
+        for item in connection.execute(
+            """
+            SELECT kind,content,valence,salience,tags FROM memories
+            WHERE season_id=? AND resident_id=?
+            ORDER BY durable DESC,salience DESC,created_tick DESC LIMIT 8
+            """,
+            (season_id, resident_id),
+        )
+    ]
+    inventory = [
+        dict(item)
+        for item in connection.execute(
+            """
+            SELECT catalog.name,catalog.category,catalog.need_key,catalog.need_restore,
+                   inventory.quantity,inventory.condition_score
+            FROM resident_inventory inventory
+            JOIN item_catalog catalog ON catalog.id=inventory.item_id
+            WHERE inventory.resident_id=? AND inventory.quantity>0
+            ORDER BY catalog.need_restore DESC,catalog.name LIMIT 16
+            """,
+            (resident_id,),
+        )
+    ]
+    if row["household_id"]:
+        inventory.extend(
+            dict(item)
+            for item in connection.execute(
+                """
+                SELECT catalog.name,catalog.category,catalog.need_key,catalog.need_restore,
+                       inventory.quantity,inventory.condition_score
+                FROM household_inventory inventory
+                JOIN item_catalog catalog ON catalog.id=inventory.item_id
+                WHERE inventory.household_id=? AND inventory.quantity>0
+                ORDER BY catalog.need_restore DESC,catalog.name LIMIT 16
+                """,
+                (row["household_id"],),
+            )
+        )
+    employment = connection.execute(
+        """
+        SELECT employment.status,employment.scheduled_minutes_per_day,
+               job.title,business.name business_name
+        FROM employment JOIN jobs job ON job.id=employment.job_id
+        LEFT JOIN businesses business ON business.id=job.business_id
+        WHERE employment.resident_id=? AND employment.status IN ('active','leave','suspended')
+        ORDER BY employment.id DESC LIMIT 1
+        """,
+        (resident_id,),
+    ).fetchone()
+    health = [
+        dict(item)
+        for item in connection.execute(
+            """
+            SELECT name,condition_type,severity,status,contagious,
+                   treatment_cost_cents AS treatmentCostCents
+            FROM health_conditions WHERE resident_id=? AND status IN ('active','recovering')
+            ORDER BY severity DESC LIMIT 4
+            """,
+            (resident_id,),
+        )
+    ]
+    recent_actions = [
+        str(item[0])
+        for item in reversed(
+            list(
+                connection.execute(
+                    """
+                    SELECT chosen_action FROM decision_history
+                    WHERE season_id=? AND resident_id=? AND chosen_action IS NOT NULL
+                    ORDER BY id DESC LIMIT 8
+                    """,
+                    (season_id, resident_id),
+                )
+            )
+        )
+    ]
+    current_action = recent_actions[-1] if recent_actions else ""
+    travel: dict[str, dict[str, float]] = {}
+    venue_hours: dict[str, dict[str, float | bool]] = {}
+    for action in (
+        "restore_energy", "eat_meal", "wash_up", "seek_healthcare", "get_comfortable",
+        "seek_safety", "have_fun", "socialize", "join_community", "get_privacy",
+        "pursue_purpose", "reclaim_autonomy", "improve_finances", "secure_childcare",
+    ):
+        _, location, _ = _v2_action_plan(row, action, hour)
+        x, y = LOCATION_POINTS.get(location, LOCATION_POINTS["Town Square"])
+        distance = math.hypot(float(row["x"]) - x, float(row["y"]) - y)
+        travel[action] = {"minutes": round(distance / 38 * 5, 1), "costCents": 0}
+        if action == "seek_healthcare":
+            venue_hours[action] = {"opens": 8, "closes": 18}
+        elif action in {"improve_finances", "pursue_purpose"}:
+            venue_hours[action] = {"opens": 7, "closes": 19}
+        else:
+            venue_hours[action] = {"openNow": True}
+    dependents = len(
+        connection.execute(
+            """
+            SELECT 1 FROM resident_season_state
+            WHERE season_id=? AND current_caregiver_id=? AND life_stage IN ('baby','child')
+            """,
+            (season_id, resident_id),
+        ).fetchall()
+    )
+    uncovered = int(
+        connection.execute(
+            """
+            SELECT COUNT(*) FROM resident_season_state
+            WHERE season_id=? AND household_id=? AND life_stage IN ('baby','child')
+              AND care_state='uncovered'
+            """,
+            (season_id, row["household_id"]),
+        ).fetchone()[0]
+    ) if row["household_id"] else 0
+    finances = resident_finances(connection, resident_id)
+    return {
+        "needs": needs,
+        "wants": wants,
+        "hour": hour,
+        "weather": weather,
+        "nearbyResidents": nearby,
+        "crowding": nearby * 8,
+        "finances": {"cash": finances["cashCents"], "debt": finances["debtCents"]},
+        "lifeStage": row["life_stage"],
+        "event": {"salience": 65, "title": event["title"]} if event else {},
+        "currentAction": current_action,
+        "actionHistory": recent_actions,
+        "traits": loads(row["traits_json"], {}),
+        "routine": row["routine"],
+        "preferredAction": row["preferred_action"],
+        "preferenceTags": loads(row["preference_tags_json"], []),
+        "goals": goals,
+        "relationships": relationships,
+        "memories": memories,
+        "inventory": inventory,
+        "employment": dict(employment) if employment else {"status": "unemployed"},
+        "care": {"dependents": dependents, "coverage": 0 if uncovered else 1},
+        "uncoveredDependents": uncovered,
+        "health": {
+            "severity": max((int(item["severity"]) for item in health), default=0),
+            "conditions": health,
+        },
+        "healthConditions": health,
+        "travel": travel,
+        "venueHours": venue_hours,
+        "decisionSeed": [str(season["seed_hex"]), resident_id, tick],
+        "maxOrdinaryRepeats": 3,
+        "selectionTemperature": 20,
+    }
+
+
+def _progress_connected_goals(
+    connection: sqlite3.Connection,
+    season_id: int,
+    resident_id: int,
+    action: str,
+    activity_id: int,
+    tick: int,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    action_terms = {
+        "pursue_purpose": ("purpose", "progress", "project", "work"),
+        "improve_finances": ("work", "career", "stable", "contribution"),
+        "socialize": ("relationship", "friend", "town", "contribution"),
+        "join_community": ("relationship", "town", "community", "contribution"),
+        "secure_childcare": ("care", "family", "secure"),
+        "seek_healthcare": ("health", "stable"),
+        "have_fun": ("fun", "play", "hobby"),
+        "get_privacy": ("privacy", "quiet", "rest"),
+        "get_comfortable": ("comfort", "home", "stable"),
+        "seek_safety": ("safe", "secure", "stable"),
+        "reclaim_autonomy": ("independent", "autonomy"),
+    }.get(action, ())
+    candidates = list(
+        connection.execute(
+            """
+            SELECT * FROM goals WHERE season_id=? AND resident_id=? AND status='active'
+            ORDER BY CASE scope WHEN 'daily' THEN 0 ELSE 1 END,id
+            """,
+            (season_id, resident_id),
+        )
+    )
+    selected = next(
+        (
+            goal for goal in candidates
+            if action_terms and any(term in str(goal["description"]).casefold() for term in action_terms)
+        ),
+        None,
+    )
+    if selected:
+        evidence = loads(selected["evidence_json"], [])
+        if isinstance(evidence, dict):
+            evidence = [
+                {"activityId": int(activity_id), "type": "historical"}
+                for activity_id in evidence.get("activityIds", [])
+                if isinstance(activity_id, int)
+            ]
+        elif not isinstance(evidence, list):
+            evidence = []
+        evidence.append({"activityId": activity_id, "action": action, "tick": tick})
+        evidence = evidence[-24:]
+        increment = 35 if selected["scope"] == "daily" else 8
+        progress = min(100, int(selected["progress"]) + increment)
+        status = "complete" if progress >= 100 else "active"
+        connection.execute(
+            """
+            UPDATE goals SET progress=?,status=?,completed_tick=?,evidence_json=? WHERE id=?
+            """,
+            (progress, status, tick if status == "complete" else None, dumps(evidence), selected["id"]),
+        )
+        results.append({"id": int(selected["id"]), "scope": selected["scope"], "progress": progress, "status": status})
+    life_goal = connection.execute(
+        "SELECT * FROM life_goals WHERE resident_id=? AND status='active' ORDER BY id LIMIT 1",
+        (resident_id,),
+    ).fetchone()
+    life_actions = {
+        "family": {"secure_childcare", "socialize", "seek_safety", "seek_healthcare"},
+        "growth": {"pursue_purpose", "have_fun", "socialize", "seek_healthcare"},
+        "independence": {"pursue_purpose", "reclaim_autonomy", "improve_finances", "socialize"},
+        "life": {"pursue_purpose", "improve_finances", "socialize", "join_community", "secure_childcare"},
+        "legacy": {"pursue_purpose", "socialize", "join_community", "secure_childcare"},
+    }
+    if life_goal and action in life_actions.get(str(life_goal["category"]), set()):
+        evidence = loads(life_goal["evidence_json"], [])
+        evidence.append({"seasonId": season_id, "activityId": activity_id, "action": action, "tick": tick})
+        progress = min(100, int(life_goal["progress"]) + 2)
+        status = "complete" if progress >= 100 else "active"
+        connection.execute(
+            """
+            UPDATE life_goals SET progress=?,status=?,evidence_json=?,
+              completed_season_id=?,completed_tick=? WHERE id=?
+            """,
+            (
+                progress, status, dumps(evidence[-48:]),
+                season_id if status == "complete" else None,
+                tick if status == "complete" else None,
+                life_goal["id"],
+            ),
+        )
+        results.append({"id": int(life_goal["id"]), "scope": "life", "progress": progress, "status": status})
+    connection.execute(
+        """
+        UPDATE resident_wants SET progress=MIN(100,progress+35),status='pursuing',
+          resolved_tick=CASE WHEN progress+35>=100 THEN ? ELSE resolved_tick END
+        WHERE id=(
+          SELECT id FROM resident_wants WHERE season_id=? AND resident_id=?
+            AND status IN ('active','pursuing') AND action_key=?
+          ORDER BY priority DESC,id LIMIT 1
+        )
+        """,
+        (tick, season_id, resident_id, action),
+    )
+    connection.execute(
+        """
+        UPDATE resident_wants SET status='fulfilled'
+        WHERE season_id=? AND resident_id=? AND action_key=? AND progress>=100
+          AND status='pursuing'
+        """,
+        (season_id, resident_id, action),
+    )
+    return results
+
+
+def _begin_health_treatment(
+    connection: sqlite3.Connection,
+    season_id: int,
+    resident_id: int,
+    tick: int,
+) -> list[dict[str, Any]]:
+    provider = connection.execute(
+        "SELECT id FROM businesses WHERE name='Lagoon Health Centre' AND status!='closed' LIMIT 1"
+    ).fetchone()
+    rows = list(
+        connection.execute(
+            """
+            SELECT id,name,severity,treatment_cost_cents FROM health_conditions
+            WHERE resident_id=? AND status='active' ORDER BY severity DESC,id
+            """,
+            (resident_id,),
+        )
+    )
+    treated: list[dict[str, Any]] = []
+    for condition in rows:
+        cost = int(condition["treatment_cost_cents"] or 0) or max(
+            1_500, int(condition["severity"]) * 85,
+        )
+        connection.execute(
+            """
+            UPDATE health_conditions SET status='recovering',provider_business_id=?,
+              treatment_cost_cents=? WHERE id=?
+            """,
+            (provider["id"] if provider else None, cost, condition["id"]),
+        )
+        treated.append(
+            {
+                "id": int(condition["id"]),
+                "name": str(condition["name"]),
+                "severity": int(condition["severity"]),
+                "status": "recovering",
+                "treatmentCostCents": cost,
+            }
+        )
+    return treated
+
+
+def _advance_health_conditions(
+    connection: sqlite3.Connection,
+    season: sqlite3.Row,
+    day: int,
+    tick: int,
+) -> None:
+    for row in list(
+        connection.execute(
+            """
+            SELECT condition.*,resident.slug FROM health_conditions condition
+            JOIN residents resident ON resident.id=condition.resident_id
+            WHERE condition.status IN ('active','recovering') ORDER BY condition.id
+            """
+        )
+    ):
+        rng = _rng(str(season["seed_hex"]), "health", day, int(row["id"]))
+        severity = int(row["severity"])
+        if row["status"] == "recovering":
+            severity = max(1, severity - rng.randint(9, 17))
+        elif severity <= 35:
+            severity = max(1, severity - rng.randint(2, 6))
+        else:
+            severity = min(100, severity + rng.randint(-2, 3))
+        resolved = severity <= 7
+        status = "resolved" if resolved else str(row["status"])
+        connection.execute(
+            """
+            UPDATE health_conditions SET severity=?,status=?,resolved_season_id=?,resolved_tick=?
+            WHERE id=?
+            """,
+            (
+                severity,
+                status,
+                season["id"] if resolved else None,
+                tick if resolved else None,
+                row["id"],
+            ),
+        )
+        emit(
+            connection,
+            int(season["id"]),
+            tick,
+            "health",
+            {
+                "resident": str(row["slug"]),
+                "condition": str(row["name"]),
+                "severity": severity,
+                "status": status,
+            },
+        )
+
+
+def _decay_relationships(connection: sqlite3.Connection, season_id: int, tick: int) -> None:
+    connection.execute(
+        """
+        UPDATE relationships SET
+          tension=MAX(0,tension-2),resentment=MAX(0,resentment-1),
+          attraction=CASE WHEN interactions=0 THEN
+            CASE WHEN attraction>0 THEN attraction-1 WHEN attraction<0 THEN attraction+1 ELSE 0 END
+            ELSE attraction END,
+          last_interaction_tick=COALESCE(last_interaction_tick,?)
+        WHERE season_id=?
+        """,
+        (tick, season_id),
+    )
+
+
 def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick: int) -> None:
     day_tick = tick % TICKS_PER_DAY
     hour = day_tick * 5 / 60
@@ -789,6 +1370,15 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
     for resident in rows:
         location_counts[str(resident["location"])] += 1
     weather = loads(season["weather_json"], {})
+    health_by_resident = {
+        int(item["resident_id"]): int(item["severity"] or 0)
+        for item in connection.execute(
+            """
+            SELECT resident_id,MAX(severity) severity FROM health_conditions
+            WHERE status IN ('active','recovering') GROUP BY resident_id
+            """
+        )
+    }
     for row in rows:
         _move_resident(connection, season["id"], row)
         before = normalize_needs(loads(row["needs_json"], {}))
@@ -800,6 +1390,7 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
                 "activity": row["activity"],
                 "weather": weather,
                 "crowding": max(0, location_counts[str(row["location"])] - 1) * 8,
+                "health": {"severity": health_by_resident.get(int(row["id"]), 0)},
             }
         )
         needs = needs_result["needs"]
@@ -962,27 +1553,40 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
                         int(round(needs["health"])), tick, season["id"], row["id"],
                     ),
                 )
-                connection.execute(
+                activity_id = int(connection.execute(
                     """
                     INSERT INTO activities(season_id,tick,resident_id,kind,summary,location,source,created_at)
-                    VALUES(?,?,?,?,?,?,?,?)
+                    VALUES(?,?,?,?,?,?,?,?) RETURNING id
                     """,
                     (season["id"], tick, row["id"], action, activity, location, "utility-v2", now_iso()),
+                ).fetchone()[0])
+                treated = (
+                    _begin_health_treatment(
+                        connection, int(season["id"]), int(row["id"]), tick,
+                    )
+                    if action == "seek_healthcare"
+                    else []
+                )
+                goal_changes = _progress_connected_goals(
+                    connection,
+                    int(season["id"]),
+                    int(row["id"]),
+                    action,
+                    activity_id,
+                    tick,
                 )
                 emit(connection, season["id"], tick, "activity", {
                     "resident": row["slug"], "activity": activity, "location": location,
                     "mood": mood["label"], "decisionId": current_decision,
                 })
-                progress = 4 if action in {"pursue_purpose", "improve_finances"} else 1
-                connection.execute(
-                    """
-                    UPDATE goals SET progress=MIN(100,progress+?),
-                      status=CASE WHEN progress+?>=100 THEN 'complete' ELSE status END,
-                      completed_tick=CASE WHEN progress+?>=100 THEN ? ELSE completed_tick END
-                    WHERE season_id=? AND resident_id=? AND status='active'
-                    """,
-                    (progress, progress, progress, tick, season["id"], row["id"]),
-                )
+                if goal_changes:
+                    emit(connection, season["id"], tick, "goal_change", {
+                        "resident": row["slug"], "goals": goal_changes,
+                    })
+                if treated:
+                    emit(connection, int(season["id"]), tick, "health", {
+                        "resident": row["slug"], "treatment": treated,
+                    })
             else:
                 if current_decision:
                     connection.execute(
@@ -992,21 +1596,24 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
                         """,
                         (tick, mood["label"], current_decision),
                     )
-                wants = generate_short_term_wants({"needs": needs, "limit": 3})["wants"]
-                finances = resident_finances(connection, int(row["id"]))
+                generated = generate_short_term_wants({"needs": needs, "limit": 3})["wants"]
+                wants = _sync_resident_wants(
+                    connection, int(season["id"]), int(row["id"]), tick, generated,
+                )
+                context = _decision_context(
+                    connection,
+                    season,
+                    row,
+                    tick,
+                    hour,
+                    needs,
+                    wants,
+                    weather,
+                    event,
+                    max(0, location_counts[str(row["location"])] - 1),
+                )
                 decision_result = score_candidate_actions(
-                    {
-                        "needs": needs,
-                        "wants": wants,
-                        "hour": hour,
-                        "weather": weather,
-                        "nearbyResidents": max(0, location_counts[str(row["location"])] - 1),
-                        "crowding": max(0, location_counts[str(row["location"])] - 1) * 8,
-                        "finances": {"debt": finances["debtCents"]},
-                        "lifeStage": row["life_stage"],
-                        "event": {"salience": 65} if event else {},
-                        "currentAction": row["activity"],
-                    }
+                    context, seed=context["decisionSeed"],
                 )
                 selected = decision_result["choices"][0]
                 action = str(selected["action"])
@@ -1038,35 +1645,22 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
                             choice["score"], int(choice["rank"] == 1),
                         ),
                     )
-                    connection.execute(
-                        """
-                        INSERT INTO decision_factors(
-                          decision_id,option_rank,factor_kind,factor_key,weight,explanation
-                        ) VALUES(?,?,'need',?,?,?)
-                        """,
-                        (
-                            decision_id, choice["rank"], choice["primaryNeed"],
-                            100 - float(choice["needValue"]), "Current need satisfaction shaped this option.",
-                        ),
-                    )
-                connection.execute(
-                    "DELETE FROM resident_wants WHERE season_id=? AND resident_id=? AND kind='short_term'",
-                    (season["id"], row["id"]),
-                )
-                connection.executemany(
-                    """
-                    INSERT INTO resident_wants(
-                      season_id,resident_id,kind,description,status,priority,progress,created_tick
-                    ) VALUES(?,?,'short_term',?,'active',?,0,?)
-                    """,
-                    [
-                        (
-                            season["id"], row["id"], want["label"],
-                            int(round(max(0, min(100, want["priority"])))), tick,
+                    for factor in choice.get("factors", []):
+                        connection.execute(
+                            """
+                            INSERT OR REPLACE INTO decision_factors(
+                              decision_id,option_rank,factor_kind,factor_key,weight,explanation
+                            ) VALUES(?,?,?,?,?,?)
+                            """,
+                            (
+                                decision_id,
+                                choice["rank"],
+                                str(factor.get("kind", "context"))[:40],
+                                str(factor.get("key", "unknown"))[:80],
+                                float(factor.get("weight", 0)),
+                                str(factor.get("explanation", ""))[:300],
+                            ),
                         )
-                        for want in wants
-                    ],
-                )
                 connection.execute(
                     """
                     UPDATE resident_state SET public_thought=?,mood=?,needs_json=?,
@@ -1175,9 +1769,10 @@ def _close_poll(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -
     top_votes = int(options[0]["votes"]) if options else 0
     tied = [option for option in options if int(option["votes"]) == top_votes]
     winner = _rng(season["seed_hex"], "poll-winner", day).choice(tied or options)
+    selection_source = "visitor" if top_votes > 0 else "town"
     connection.execute(
-        "UPDATE polls SET status='closed',winner_option_id=? WHERE id=?",
-        (winner["id"], poll["id"]),
+        "UPDATE polls SET status='closed',winner_option_id=?,selection_source=? WHERE id=?",
+        (winner["id"], selection_source, poll["id"]),
     )
     connection.execute(
         "UPDATE seasons SET next_catalyst_slug=? WHERE id=?",
@@ -1188,7 +1783,13 @@ def _close_poll(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -
         season["id"],
         day * TICKS_PER_DAY + POLL_CLOSE_TICK,
         "poll",
-        {"status": "closed", "pollId": poll["id"], "winner": winner["choice_id"], "title": winner["title"]},
+        {
+            "status": "closed",
+            "pollId": poll["id"],
+            "winner": winner["choice_id"],
+            "title": winner["title"],
+            "selectionSource": selection_source,
+        },
     )
 
 
@@ -1219,27 +1820,25 @@ def _schedule_daily_jobs(connection: sqlite3.Connection, season: sqlite3.Row, da
             }
         )
     if day_tick == 72:
-        for group in range(3):
-            _queue_job(
-                connection,
-                season["id"],
-                day,
-                tick,
-                "resident_intent",
-                1,
-                {"day": day, "group": group, "residents": residents[group * 4:(group + 1) * 4]},
-            )
+        _queue_job(
+            connection,
+            season["id"],
+            day,
+            tick,
+            "resident_intent",
+            1,
+            {"day": day, "residents": residents[:24]},
+        )
     if day_tick == 252:
-        for group in range(3):
-            _queue_job(
-                connection,
-                season["id"],
-                day,
-                tick,
-                "resident_reflection",
-                2,
-                {"day": day, "group": group, "residents": residents[group * 4:(group + 1) * 4]},
-            )
+        _queue_job(
+            connection,
+            season["id"],
+            day,
+            tick,
+            "resident_reflection",
+            2,
+            {"day": day, "residents": residents[:24]},
+        )
     if day_tick == 258:
         _queue_job(
             connection,
@@ -1248,7 +1847,7 @@ def _schedule_daily_jobs(connection: sqlite3.Connection, season: sqlite3.Row, da
             tick,
             "chronicle",
             1,
-            {"day": day, "activities": _day_activity_count(connection, season["id"], day)},
+            _chronicle_context(connection, season, day),
         )
     if day_tick == 144:
         start = day * TICKS_PER_DAY
@@ -1292,6 +1891,121 @@ def _day_activity_count(connection: sqlite3.Connection, season_id: int, day: int
             (season_id, start, end),
         ).fetchone()[0]
     )
+
+
+def _chronicle_context(
+    connection: sqlite3.Connection,
+    season: sqlite3.Row,
+    day: int,
+) -> dict[str, Any]:
+    start = day * TICKS_PER_DAY
+    end = start + TICKS_PER_DAY
+    event = connection.execute(
+        """
+        SELECT id,slug,title,category,summary FROM town_events
+        WHERE season_id=? AND day=? ORDER BY id DESC LIMIT 1
+        """,
+        (season["id"], day),
+    ).fetchone()
+    residents = [
+        {"slug": str(row["slug"]), "name": str(row["name"])}
+        for row in connection.execute(
+            """
+            SELECT r.slug,r.name FROM residents r
+            JOIN resident_season_state state ON state.resident_id=r.id
+            WHERE state.season_id=? ORDER BY r.id
+            """,
+            (season["id"],),
+        )
+    ]
+    ledger = []
+    for row in connection.execute(
+        """
+        SELECT id,tick,entry_type,headline,summary,significance,phase
+        FROM story_ledger
+        WHERE season_id=? AND ((tick>=? AND tick<?) OR (day=? AND phase='epilogue'))
+        ORDER BY significance DESC,tick,id LIMIT 16
+        """,
+        (season["id"], start, end, day),
+    ):
+        participants = [
+            str(item[0])
+            for item in connection.execute(
+                """
+                SELECT resident.slug FROM story_ledger_participants participant
+                JOIN residents resident ON resident.id=participant.resident_id
+                WHERE participant.ledger_id=? ORDER BY resident.slug
+                """,
+                (row["id"],),
+            )
+        ]
+        ledger.append(
+            {
+                "id": int(row["id"]),
+                "tick": int(row["tick"]),
+                "type": str(row["entry_type"]),
+                "headline": str(row["headline"]),
+                "summary": str(row["summary"]),
+                "significance": int(row["significance"]),
+                "phase": str(row["phase"]),
+                "residents": participants,
+            }
+        )
+    conversations = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM conversations WHERE season_id=? AND tick>=? AND tick<?",
+            (season["id"], start, end),
+        ).fetchone()[0]
+    )
+    relationship_changes = [
+        {
+            "a": str(row["a"]),
+            "b": str(row["b"]),
+            "affinity": int(row["affinity"]),
+            "trust": int(row["trust"]),
+            "tension": int(row["tension"]),
+            "resentment": int(row["resentment"]),
+        }
+        for row in connection.execute(
+            """
+            SELECT a.slug a,b.slug b,relationship.affinity,relationship.trust,
+                   relationship.tension,relationship.resentment
+            FROM relationships relationship
+            JOIN residents a ON a.id=relationship.resident_a
+            JOIN residents b ON b.id=relationship.resident_b
+            WHERE relationship.season_id=? AND relationship.last_interaction_tick>=?
+              AND relationship.last_interaction_tick<?
+            ORDER BY relationship.interactions DESC LIMIT 8
+            """,
+            (season["id"], start, end),
+        )
+    ]
+    economy = connection.execute(
+        """
+        SELECT COUNT(*) transactions,
+               COALESCE(SUM(ABS(entry.amount_cents)),0)/2 volume_cents
+        FROM financial_transactions transaction_record
+        LEFT JOIN transaction_entries entry ON entry.transaction_id=transaction_record.id
+        WHERE transaction_record.season_id=? AND transaction_record.tick>=?
+          AND transaction_record.tick<? AND transaction_record.status='posted'
+        """,
+        (season["id"], start, end),
+    ).fetchone()
+    return {
+        "day": day,
+        "weather": loads(season["weather_json"], {}),
+        "catalyst": dict(event) if event else None,
+        "residentAllowlist": residents,
+        "ledger": ledger,
+        "relationshipChanges": relationship_changes,
+        "verifiedStatistics": {
+            "activities": _day_activity_count(connection, int(season["id"]), day),
+            "conversations": conversations,
+            "ledgerEntries": len(ledger),
+            "transactions": int(economy["transactions"] or 0),
+            "economicVolumeCents": int(economy["volume_cents"] or 0),
+        },
+    }
 
 
 def _micro_event(connection: sqlite3.Connection, season: sqlite3.Row, day: int, tick: int) -> None:
@@ -1383,23 +2097,89 @@ def _dramatic_life_event(connection: sqlite3.Connection, season: sqlite3.Row, da
                     dumps([item["slug"] for item in [subject, related] if item]), "Town Square", tick, int(severity >= 70),
                 ),
             )
+    if event_type in {"illness", "accident"}:
+        condition_type = "illness" if event_type == "illness" else "injury"
+        condition_name = "Lagoon respiratory illness" if event_type == "illness" else "Dockside strain"
+        condition_severity = max(18, min(75, severity - 18 + rng.randint(-6, 6)))
+        condition_id = int(connection.execute(
+            """
+            INSERT INTO health_conditions(
+              resident_id,condition_key,name,condition_type,severity,status,contagious,
+              onset_season_id,onset_tick,treatment_cost_cents
+            ) VALUES(?,?,?,?,?,'active',?,?,?,?) RETURNING id
+            """,
+            (
+                subject["id"],
+                f"{event_type}:{season['id']}:{day}:{subject['id']}",
+                condition_name,
+                condition_type,
+                condition_severity,
+                int(event_type == "illness" and rng.random() < 0.45),
+                season["id"],
+                tick,
+                max(1_500, condition_severity * 85),
+            ),
+        ).fetchone()[0])
+        state = connection.execute(
+            "SELECT needs_json FROM resident_state WHERE season_id=? AND resident_id=?",
+            (season["id"], subject["id"]),
+        ).fetchone()
+        if state:
+            health_needs = normalize_needs(loads(state["needs_json"], {}))
+            health_needs["health"] = max(0, health_needs["health"] - condition_severity * 0.34)
+            health_needs["energy"] = max(0, health_needs["energy"] - condition_severity * 0.18)
+            health_needs["comfort"] = max(0, health_needs["comfort"] - condition_severity * 0.12)
+            connection.execute(
+                "UPDATE resident_state SET needs_json=?,updated_tick=? WHERE season_id=? AND resident_id=?",
+                (dumps(health_needs), tick, season["id"], subject["id"]),
+            )
+            connection.execute(
+                "UPDATE resident_season_state SET health_score=?,updated_tick=? WHERE season_id=? AND resident_id=?",
+                (int(round(health_needs["health"])), tick, season["id"], subject["id"]),
+            )
+        emit(connection, int(season["id"]), tick, "health", {
+            "resident": subject["slug"], "conditionId": condition_id,
+            "condition": condition_name, "severity": condition_severity, "status": "active",
+        })
     if related:
         low, high = sorted((int(subject["id"]), int(related["id"])))
+        relationship_deltas = {
+            "argument": (-4, -5, -2, -3, 7),
+            "romance": (3, 10, 12, 4, -3),
+            "gossip": (-4, -2, -1, -1, 5),
+            "betrayal": (-12, -12, -6, -15, 18),
+            "reconciliation": (10, 9, 2, 6, -15),
+            "friendship": (8, 7, 0, 3, -4),
+            "illness": (5, 5, 0, 2, -2),
+            "accident": (4, 4, 0, 1, -1),
+        }.get(event_type, (0, 0, 0, 0, max(0, tension // 2)))
+        respect, affection, attraction, commitment, resentment = relationship_deltas
         connection.execute(
             """
             UPDATE relationships SET affinity=MAX(-100,MIN(100,affinity+?)),
               trust=MAX(-100,MIN(100,trust+?)),tension=MAX(0,MIN(100,tension+?)),
               affection=MAX(-100,MIN(100,affection+?)),
               attraction=MAX(-100,MIN(100,attraction+?)),
+              respect=MAX(-100,MIN(100,respect+?)),
+              commitment=MAX(0,MIN(100,commitment+?)),
               resentment=MAX(0,MIN(100,resentment+?)),
               familiarity=MIN(100,familiarity+4),interactions=interactions+1,last_interaction_tick=?
             WHERE season_id=? AND resident_a=? AND resident_b=?
             """,
             (
-                affinity, trust, tension, affinity, 5 if event_type == "romance" else 0,
-                max(0, tension // 2), tick, season["id"], low, high,
+                affinity, trust, tension, affection, attraction, respect, commitment,
+                resentment, tick, season["id"], low, high,
             ),
         )
+        emit(connection, int(season["id"]), tick, "relationship_change", {
+            "residents": [subject["slug"], related["slug"]],
+            "cause": event_type,
+            "deltas": {
+                "affinity": affinity, "trust": trust, "tension": tension,
+                "respect": respect, "affection": affection, "attraction": attraction,
+                "commitment": commitment, "resentment": resentment,
+            },
+        })
     fact_id = int(connection.execute(
         """
         INSERT INTO facts(season_id,canonical_key,category,statement,truth_value,occurred_tick,created_at)
@@ -1452,64 +2232,86 @@ def _local_chronicle(connection: sqlite3.Connection, season: sqlite3.Row, day: i
         "SELECT 1 FROM daily_chronicles WHERE season_id=? AND day=?", (season["id"], day)
     ).fetchone():
         return
-    event = connection.execute(
-        "SELECT * FROM town_events WHERE season_id=? AND day=? ORDER BY id DESC LIMIT 1",
-        (season["id"], day),
-    ).fetchone()
-    activity_count = _day_activity_count(connection, season["id"], day)
-    conversation_count = int(
-        connection.execute(
-            "SELECT COUNT(*) FROM conversations WHERE season_id=? AND tick>=? AND tick<?",
-            (season["id"], day * TICKS_PER_DAY, (day + 1) * TICKS_PER_DAY),
-        ).fetchone()[0]
-    )
-    weather = loads(season["weather_json"], {})
+    context = _chronicle_context(connection, season, day)
+    event = context["catalyst"]
+    statistics = context["verifiedStatistics"]
+    ledger = context["ledger"]
+    weather = context["weather"]
     title = f"Day {day + 1}: {event['title'] if event else 'A quiet Lagoon day'}"
+    facts = [str(item["summary"]).strip() for item in ledger[:5] if str(item["summary"]).strip()]
+    if not facts and event:
+        facts.append(str(event["summary"]).strip())
+    if not facts:
+        facts.append("Residents followed their recorded routines around the Lagoon.")
     narrative = (
-        f"Krabville woke to {weather.get('condition', 'calm')} weather. "
-        f"{event['summary'] if event else 'Residents followed their routines around the Lagoon.'} "
-        f"The town recorded {activity_count} meaningful activity changes and "
-        f"{conversation_count} conversations before nightfall."
+        f"Krabville recorded {weather.get('condition', 'calm')} weather. "
+        + " ".join(facts)
+        + f" The ledger closed with {statistics['activities']} activity changes and "
+          f"{statistics['conversations']} conversations."
     )
     connection.execute(
         """
-        INSERT INTO daily_chronicles(season_id,day,title,narrative,statistics_json,created_at)
-        VALUES(?,?,?,?,?,?)
+        INSERT INTO daily_chronicles(
+          season_id,day,title,narrative,statistics_json,created_at,source,verified,ledger_ids_json
+        ) VALUES(?,?,?,?,?,?,'ledger_local',1,?)
         """,
         (
             season["id"],
             day,
             title,
             narrative,
-            dumps({"activities": activity_count, "conversations": conversation_count}),
+            dumps(statistics),
             now_iso(),
-        ),
-    )
-    connection.execute(
-        """
-        UPDATE goals SET status=CASE WHEN progress>=10 THEN 'complete' ELSE 'deferred' END,
-          completed_tick=CASE WHEN progress>=10 THEN ? ELSE completed_tick END
-        WHERE season_id=? AND scope='daily' AND created_tick>=? AND created_tick<?
-          AND status='active'
-        """,
-        (
-            (day + 1) * TICKS_PER_DAY - 1,
-            season["id"],
-            day * TICKS_PER_DAY,
-            (day + 1) * TICKS_PER_DAY,
+            dumps([int(item["id"]) for item in ledger]),
         ),
     )
     emit(connection, season["id"], (day + 1) * TICKS_PER_DAY - 1, "chronicle", {"day": day, "title": title})
+    emit(connection, season["id"], (day + 1) * TICKS_PER_DAY - 1, "verified_chronicle", {
+        "day": day,
+        "title": title,
+        "source": "authoritative-ledger",
+        "ledgerIds": [int(item["id"]) for item in ledger],
+    })
 
 
 def _new_day(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -> None:
     catalyst = str(season["next_catalyst_slug"] or "") or None
     weather = _weather(season["seed_hex"], day, int(season["number"]))
+    tick = day * TICKS_PER_DAY
     connection.execute(
         "UPDATE seasons SET current_day=?,world_minutes=0,next_catalyst_slug=NULL,weather_json=? WHERE id=?",
         (day, dumps(weather), season["id"]),
     )
     refreshed = connection.execute("SELECT * FROM seasons WHERE id=?", (season["id"],)).fetchone()
+    _advance_health_conditions(connection, refreshed, day, tick)
+    _decay_relationships(connection, int(season["id"]), tick)
+    care_before = {
+        int(row["resident_id"]): (row["current_caregiver_id"], row["current_care_provider_id"], row["care_state"])
+        for row in connection.execute(
+            """
+            SELECT resident_id,current_caregiver_id,current_care_provider_id,care_state
+            FROM resident_season_state WHERE season_id=? AND life_stage IN ('baby','child')
+            """,
+            (season["id"],),
+        )
+    }
+    repair_childcare(connection, int(season["id"]), tick)
+    for care in connection.execute(
+        """
+        SELECT state.resident_id,state.current_caregiver_id,state.current_care_provider_id,
+               state.care_state,resident.slug
+        FROM resident_season_state state JOIN residents resident ON resident.id=state.resident_id
+        WHERE state.season_id=? AND state.life_stage IN ('baby','child')
+        """,
+        (season["id"],),
+    ):
+        current = (care["current_caregiver_id"], care["current_care_provider_id"], care["care_state"])
+        if care_before.get(int(care["resident_id"])) != current:
+            emit(connection, int(season["id"]), tick, "care_handoff", {
+                "resident": str(care["slug"]), "careState": str(care["care_state"]),
+                "caregiverAssigned": care["current_caregiver_id"] is not None,
+                "providerAssigned": care["current_care_provider_id"] is not None,
+            })
     event = _day_event(connection, refreshed, day, catalyst)
     for resident in connection.execute(
         """
@@ -1527,7 +2329,7 @@ def _new_day(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -> N
                 resident["id"],
                 "daily",
                 f"Make one useful contribution while {event.title.lower()} shapes the town.",
-                day * TICKS_PER_DAY,
+                tick,
             ),
         )
 
@@ -1551,7 +2353,9 @@ def _complete_season(
     )
     last_day = min(DAYS_PER_SEASON - 1, max(0, (max(1, final_tick) - 1) // TICKS_PER_DAY))
     for day in range(last_day + 1):
+        finalize_day_goals(connection, int(season["id"]), day)
         _local_chronicle(connection, season, day)
+    finalize_season_goals(connection, int(season["id"]))
     completed = now_iso()
     natural = final_tick >= TARGET_TICKS
     shown_tick = TARGET_TICKS if natural else max(0, final_tick)
@@ -1567,6 +2371,11 @@ def _complete_season(
             shown_tick,
             str(season["seed_hex"]),
         )
+        life_goal_changes = _ensure_life_goals(connection, int(season["id"]), shown_tick)
+        if life_goal_changes:
+            emit(connection, int(season["id"]), shown_tick, "goal_change", {
+                "scope": "life", "changes": life_goal_changes,
+            })
     connection.execute(
         """
         UPDATE seasons SET status='complete',completed_at=?,seed_revealed=1,
@@ -1656,6 +2465,21 @@ def advance_tick(connection: sqlite3.Connection) -> dict[str, Any]:
             economy = settle_daily_economy(connection, int(season["id"]), day, tick)
             economy.update(run_daily_commerce(connection, int(season["id"]), day, tick))
             emit(connection, int(season["id"]), tick, "economy", economy)
+            if int(economy.get("purchases", 0)):
+                emit(connection, int(season["id"]), tick, "purchase", {
+                    "count": int(economy["purchases"]),
+                    "barters": int(economy.get("barters", 0)),
+                    "shortfalls": int(economy.get("shortfalls", 0)),
+                })
+            housing_changes = {
+                key: int(economy.get(key, 0))
+                for key in (
+                    "evictions", "housingStableSettlements", "rehousingEligible", "rehoused",
+                )
+                if int(economy.get(key, 0))
+            }
+            if housing_changes:
+                emit(connection, int(season["id"]), tick, "housing", housing_changes)
         if day_tick in {108, 180, 240}:
             phone = run_phone_window(connection, season, tick)
             if phone["calls"]:
@@ -1674,6 +2498,7 @@ def advance_tick(connection: sqlite3.Connection) -> dict[str, Any]:
             (next_tick, day, day_tick * 5, season["id"]),
         )
         if next_tick % TICKS_PER_DAY == 0:
+            finalize_day_goals(connection, int(season["id"]), day)
             _local_chronicle(connection, season, day)
             if day + 1 >= DAYS_PER_SEASON or (
                 season["stop_after_day"] is not None and day + 1 >= int(season["stop_after_day"])
@@ -1733,6 +2558,17 @@ def _apply_completed_jobs(connection: sqlite3.Connection, season: sqlite3.Row) -
                             resident_id,
                         ),
                     )
+                    connection.execute(
+                        """
+                        UPDATE resident_season_state SET preferred_action=?,preference_tags_json=?
+                        WHERE season_id=? AND resident_id=?
+                        """,
+                        (
+                            str(item.get("preferredAction", ""))[:40] or None,
+                            dumps(list(item.get("preferenceTags", []))[:4]),
+                            season["id"], resident_id,
+                        ),
+                    )
                 else:
                     reflection = str(item.get("reflection", ""))[:360]
                     public_thought = str(item.get("publicThought", reflection))[:280]
@@ -1772,6 +2608,8 @@ def _apply_completed_jobs(connection: sqlite3.Connection, season: sqlite3.Row) -
                 connection.execute(
                     """
                     UPDATE relationships SET affinity=MIN(100,affinity+2),trust=MIN(100,trust+1),
+                      affection=MIN(100,affection+1),respect=MIN(100,respect+1),
+                      tension=MAX(0,tension-1),resentment=MAX(0,resentment-1),
                       familiarity=MIN(100,familiarity+2),interactions=interactions+1,
                       last_interaction_tick=?
                     WHERE season_id=? AND resident_a=? AND resident_b=?
@@ -1779,19 +2617,65 @@ def _apply_completed_jobs(connection: sqlite3.Connection, season: sqlite3.Row) -
                     (job["tick"], season["id"], low, high),
                 )
                 emit(connection, season["id"], job["tick"], "conversation", {"residents": slugs, "summary": summary, "dialogue": dialogue})
+                emit(connection, season["id"], job["tick"], "relationship_change", {
+                    "residents": slugs,
+                    "cause": "conversation",
+                    "deltas": {
+                        "affinity": 2, "trust": 1, "affection": 1,
+                        "respect": 1, "tension": -1, "resentment": -1,
+                    },
+                })
         elif kind == "chronicle":
             day = int(job["day"])
-            title = str(result.get("title", f"Day {day + 1}"))[:160]
-            narrative = str(result.get("narrative", ""))[:1200]
+            context = loads(job["context_json"], {})
+            catalyst = context.get("catalyst") if isinstance(context.get("catalyst"), dict) else None
+            title = f"Day {day + 1}: {str(catalyst.get('title', 'A recorded Lagoon day')) if catalyst else 'A recorded Lagoon day'}"[:160]
+            allowed_ledger = {
+                int(item["id"]): item
+                for item in context.get("ledger", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), int)
+            }
+            selected_ids = [
+                int(value)
+                for value in result.get("ledgerIds", [])
+                if isinstance(value, int) and value in allowed_ledger
+            ]
+            if not selected_ids:
+                selected_ids = list(allowed_ledger)[:5]
+            facts = [str(allowed_ledger[value].get("summary", "")).strip() for value in selected_ids]
+            facts = [fact for fact in facts if fact]
+            if not facts and catalyst:
+                facts.append(str(catalyst.get("summary", "")).strip())
+            statistics = context.get("verifiedStatistics", {})
+            narrative = " ".join(facts) or "Residents followed their recorded routines around the Lagoon."
+            narrative += (
+                f" The ledger closed with {int(statistics.get('activities', 0))} activity changes and "
+                f"{int(statistics.get('conversations', 0))} conversations."
+            )
             if narrative:
                 connection.execute(
                     """
-                    INSERT INTO daily_chronicles(season_id,day,title,narrative,statistics_json,created_at)
-                    VALUES(?,?,?,?,?,?)
-                    ON CONFLICT(season_id,day) DO UPDATE SET title=excluded.title,narrative=excluded.narrative
+                    INSERT INTO daily_chronicles(
+                      season_id,day,title,narrative,statistics_json,created_at,
+                      source,verified,ledger_ids_json
+                    ) VALUES(?,?,?,?,?,?,'model_verified',1,?)
+                    ON CONFLICT(season_id,day) DO UPDATE SET
+                      title=excluded.title,narrative=excluded.narrative,
+                      statistics_json=excluded.statistics_json,created_at=excluded.created_at,
+                      source=excluded.source,verified=excluded.verified,
+                      ledger_ids_json=excluded.ledger_ids_json
                     """,
-                    (season["id"], day, title, narrative, dumps(result.get("statistics", {})), now_iso()),
+                    (
+                        season["id"], day, title, narrative, dumps(statistics),
+                        now_iso(), dumps(selected_ids),
+                    ),
                 )
+                emit(connection, season["id"], job["tick"], "verified_chronicle", {
+                    "day": day,
+                    "title": title,
+                    "source": "model-verified-ledger",
+                    "ledgerIds": selected_ids,
+                })
         connection.execute(
             "UPDATE model_jobs SET error_code='applied',updated_at=? WHERE id=?",
             (now_iso(), job["id"]),

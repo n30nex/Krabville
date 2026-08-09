@@ -3,7 +3,20 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from krabville.api import create_app
-from krabville.commerce_v2 import repair_dependent_finances, run_daily_commerce, run_phone_window
+from krabville.commerce_v2 import (
+    _illicit_relationship_outcome,
+    _story_event,
+    claim_due_commitment,
+    deterministic_commitment_outcome,
+    deterministic_phone_outcome,
+    household_funding_account,
+    illicit_actor_candidates,
+    move_market_prices,
+    repair_dependent_finances,
+    run_daily_commerce,
+    run_phone_window,
+    visible_purchase_candidates,
+)
 from krabville.db import dumps, initialize, loads
 from krabville.runtime_v2 import account_balance, settle_daily_economy
 from krabville.world import advance_tick, start_season
@@ -37,6 +50,12 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
         (stock["business_id"], stock["item_id"]),
     )
     model_jobs = connection.execute("SELECT COUNT(*) FROM model_jobs").fetchone()[0]
+    shared_before_settlement = {
+        int(row["id"]): account_balance(connection, int(row["id"]))
+        for row in connection.execute(
+            "SELECT id FROM financial_accounts WHERE household_id IS NOT NULL AND name='Household chequing'"
+        )
+    }
     business_before = {
         row["name"]: account_balance(connection, int(row["account_id"]))
         for row in connection.execute(
@@ -47,6 +66,9 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
         )
     }
     settlement = settle_daily_economy(connection, int(season["id"]), 0, 48)
+    shared_after_settlement = {
+        account_id: account_balance(connection, account_id) for account_id in shared_before_settlement
+    }
     business_after = {
         row["name"]: account_balance(connection, int(row["account_id"]))
         for row in connection.execute(
@@ -59,9 +81,39 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
     assert settlement["businessIncome"] > 0
     assert settlement["businessPayroll"] > 0
     assert settlement["servicePurchases"] > 0
+    assert settlement["categorizedTransactions"] > settlement["transactions"]
+    assert settlement["rent"] > 0
+    assert settlement["utilities"] > 0
+    assert settlement["taxes"] > 0
+    assert any(
+        shared_after_settlement[account_id] != balance
+        for account_id, balance in shared_before_settlement.items()
+    )
+    categories = {
+        str(row[0]) for row in connection.execute(
+            "SELECT DISTINCT category FROM financial_transactions WHERE season_id=? AND status='posted'",
+            (season["id"],),
+        )
+    }
+    assert {"wages", "taxes", "rent", "utilities", "debt", "investments"} <= categories
+    assert connection.execute(
+        "SELECT COUNT(*) FROM financial_transactions WHERE season_id=? AND category='daily_settlement' AND status='posted'",
+        (season["id"],),
+    ).fetchone()[0] == 0
     assert any(business_after[name] != balance for name, balance in business_before.items())
+    household_before = {
+        int(row["id"]): account_balance(connection, int(row["id"]))
+        for row in connection.execute(
+            "SELECT id FROM financial_accounts WHERE household_id IS NOT NULL AND name='Household chequing'"
+        )
+    }
     result = run_daily_commerce(connection, int(season["id"]), 0, 48)
+    household_after = {
+        account_id: account_balance(connection, account_id) for account_id in household_before
+    }
     assert result["restocked"] >= 1
+    assert result["pricesMoved"] > 0
+    assert any(household_after[account_id] < balance for account_id, balance in household_before.items())
     assert connection.execute(
         "SELECT quantity FROM business_inventory WHERE business_id=? AND item_id=?",
         (stock["business_id"], stock["item_id"]),
@@ -168,8 +220,402 @@ def test_default_can_repossess_and_move_a_household_to_safety(settings_factory) 
         """,
         (debtor["household_id"],),
     ).fetchone()[0] == "harbour-shelter"
+    assert connection.execute(
+        "SELECT COUNT(DISTINCT tick / 288) FROM life_events WHERE season_id=? AND household_id=? AND event_type='housing_arrears'",
+        (season["id"], debtor["household_id"]),
+    ).fetchone()[0] == 2
+    assert connection.execute(
+        "SELECT COUNT(DISTINCT tick / 288) FROM life_events WHERE season_id=? AND household_id=? AND event_type='housing_recovery_attempt' AND outcome='failed'",
+        (season["id"], debtor["household_id"]),
+    ).fetchone()[0] == 2
+    recovery = connection.execute(
+        "SELECT status,stage,arrears_days,failed_attempts FROM housing_recovery WHERE season_id=? AND household_id=?",
+        (season["id"], debtor["household_id"]),
+    ).fetchone()
+    assert recovery["status"] == "active"
+    assert recovery["stage"] == "sheltered"
+    assert recovery["arrears_days"] == recovery["failed_attempts"] == 2
+    assert run_daily_commerce(connection, int(season["id"]), 5, 5 * 288)["evictions"] == 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM life_events WHERE season_id=? AND event_type='eviction'",
+        (season["id"],),
+    ).fetchone()[0] == 1
     assert not list(connection.execute("PRAGMA foreign_key_check"))
     assert connection.execute("SELECT status FROM debts WHERE id=?", (debt_id,)).fetchone()[0] in {"defaulted", "forgiven"}
+    connection.close()
+
+
+def test_purchase_candidates_are_visible_diverse_and_non_mutating(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="98" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    household = connection.execute("SELECT id FROM households WHERE status='active' ORDER BY id LIMIT 1").fetchone()
+    shared = connection.execute(
+        "SELECT id FROM financial_accounts WHERE household_id=? AND name='Household chequing'",
+        (household["id"],),
+    ).fetchone()
+    transactions_before = connection.execute("SELECT COUNT(*) FROM financial_transactions").fetchone()[0]
+
+    assert household_funding_account(
+        connection, int(household["id"]), required_cents=1_000
+    ) == int(shared["id"])
+    candidates = visible_purchase_candidates(
+        connection,
+        int(season["id"]),
+        0,
+        household_id=int(household["id"]),
+        budget_cents=100_000,
+        limit=12,
+    )
+
+    assert len(candidates) >= 4
+    assert len({candidate["category"] for candidate in candidates}) >= 4
+    assert all(candidate["priceCents"] <= 100_000 for candidate in candidates)
+    assert all(candidate["reason"] and candidate["business"] for candidate in candidates)
+    assert connection.execute("SELECT COUNT(*) FROM financial_transactions").fetchone()[0] == transactions_before
+    connection.close()
+
+
+def test_market_price_movement_is_deterministic_and_bounded(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="99" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    row = connection.execute(
+        "SELECT business_id,item_id FROM business_inventory ORDER BY business_id,item_id LIMIT 1"
+    ).fetchone()
+    connection.execute(
+        "UPDATE business_inventory SET quantity=0 WHERE business_id=? AND item_id=?",
+        (row["business_id"], row["item_id"]),
+    )
+    before = {
+        (int(item["business_id"]), int(item["item_id"])): int(item["price_cents"])
+        for item in connection.execute("SELECT business_id,item_id,price_cents FROM business_inventory")
+    }
+
+    changed = move_market_prices(connection, int(season["id"]), 0, max_daily_change_bps=250)
+    after = {
+        (int(item["business_id"]), int(item["item_id"])): int(item["price_cents"])
+        for item in connection.execute("SELECT business_id,item_id,price_cents FROM business_inventory")
+    }
+
+    assert changed > 0
+    assert after[(int(row["business_id"]), int(row["item_id"]))] > before[(int(row["business_id"]), int(row["item_id"]))]
+    for key, old_price in before.items():
+        assert abs(after[key] - old_price) <= max(1, round(old_price * 0.025))
+    connection.close()
+
+
+def test_categorized_settlement_replay_is_idempotent_and_balanced(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="9b" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+
+    first = settle_daily_economy(connection, int(season["id"]), 0, 48)
+    transaction_count = int(connection.execute("SELECT COUNT(*) FROM financial_transactions").fetchone()[0])
+    balances = {
+        int(row["id"]): account_balance(connection, int(row["id"]))
+        for row in connection.execute("SELECT id FROM financial_accounts")
+    }
+    debts = list(connection.execute("SELECT id,outstanding_cents,status FROM debts ORDER BY id"))
+    investments = list(connection.execute("SELECT id,market_value_cents,updated_tick FROM investments ORDER BY id"))
+
+    second = settle_daily_economy(connection, int(season["id"]), 0, 48)
+
+    assert first["categorizedTransactions"] > 0
+    assert second["transactions"] == 0
+    assert second["categorizedTransactions"] == 0
+    assert connection.execute("SELECT COUNT(*) FROM financial_transactions").fetchone()[0] == transaction_count
+    assert {
+        int(row["id"]): account_balance(connection, int(row["id"]))
+        for row in connection.execute("SELECT id FROM financial_accounts")
+    } == balances
+    assert list(connection.execute("SELECT id,outstanding_cents,status FROM debts ORDER BY id")) == debts
+    assert list(connection.execute("SELECT id,market_value_cents,updated_tick FROM investments ORDER BY id")) == investments
+    assert not list(connection.execute(
+        """
+        SELECT t.id FROM financial_transactions t JOIN transaction_entries e ON e.transaction_id=t.id
+        WHERE t.status='posted' GROUP BY t.id HAVING SUM(e.amount_cents)<>0
+        """
+    ))
+    connection.close()
+
+
+def test_phone_and_commitment_outcomes_are_deterministic(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="9c" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    residents = connection.execute(
+        """
+        SELECT r.id FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.alive=1 AND l.current_stage IN ('teen','adult','senior') ORDER BY r.id LIMIT 2
+        """
+    ).fetchall()
+    caller_id, recipient_id = int(residents[0][0]), int(residents[1][0])
+    seed = str(season["seed_hex"])
+    phone_outcomes = {
+        deterministic_phone_outcome(seed, tick, caller_id, recipient_id, "meetup", trust=0, tension=100)
+        for tick in range(200)
+    }
+    assert {"completed", "declined"} <= phone_outcomes
+
+    ids: dict[str, int] = {}
+    for desired in ("complete", "reschedule", "forget"):
+        ids[desired] = next(
+            commitment_id for commitment_id in range(1_000, 5_000)
+            if deterministic_commitment_outcome(seed, commitment_id, recipient_id, 100) == desired
+            and commitment_id not in ids.values()
+        )
+    results: dict[str, object] = {}
+    for desired, commitment_id in ids.items():
+        communication_id = commitment_id + 10_000
+        connection.execute(
+            """
+            INSERT INTO communications(
+              id,season_id,tick,caller_resident_id,recipient_resident_id,channel,purpose,
+              summary,visibility,status,duration_minutes,created_at
+            ) VALUES(?,?,90,?,?,'call','meetup',?,'public','completed',5,'2026-01-01T00:00:00Z')
+            """,
+            (communication_id, season["id"], caller_id, recipient_id, f"{desired} test"),
+        )
+        connection.execute(
+            """
+            INSERT INTO communication_commitments(
+              id,communication_id,resident_id,commitment_type,location,due_tick,status
+            ) VALUES(?,?,?,'meetup','Town Square',100,'pending')
+            """,
+            (commitment_id, communication_id, recipient_id),
+        )
+        results[desired] = claim_due_commitment(
+            connection, int(season["id"]), recipient_id, 100
+        )
+
+    complete = connection.execute(
+        "SELECT status,completed_tick FROM communication_commitments WHERE id=?", (ids["complete"],)
+    ).fetchone()
+    rescheduled = connection.execute(
+        "SELECT status,due_tick FROM communication_commitments WHERE id=?", (ids["reschedule"],)
+    ).fetchone()
+    forgotten = connection.execute(
+        "SELECT status,completed_tick FROM communication_commitments WHERE id=?", (ids["forget"],)
+    ).fetchone()
+    assert results["complete"] and results["complete"]["outcome"] == "complete"
+    assert complete["status"] == "completed" and complete["completed_tick"] == 100
+    assert results["reschedule"] is None
+    assert rescheduled["status"] == "pending" and int(rescheduled["due_tick"]) > 100
+    assert results["forget"] is None
+    assert forgotten["status"] == "missed" and forgotten["completed_tick"] == 100
+    connection.close()
+
+
+def test_phone_window_can_decline_without_creating_commitments(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="9d" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    connection.execute(
+        "UPDATE resident_needs SET satisfaction=0 WHERE season_id=? AND need_key IN ('social','belonging')",
+        (season["id"],),
+    )
+    connection.execute(
+        "UPDATE relationships SET trust=0,tension=100 WHERE season_id=?",
+        (season["id"],),
+    )
+
+    for tick in range(1, 241):
+        if run_phone_window(connection, season, tick)["declined"]:
+            break
+    declined = connection.execute(
+        "SELECT id,status FROM communications WHERE season_id=? AND status='declined' ORDER BY id LIMIT 1",
+        (season["id"],),
+    ).fetchone()
+
+    assert declined and declined["status"] == "declined"
+    assert connection.execute(
+        "SELECT COUNT(*) FROM communication_commitments WHERE communication_id=?",
+        (declined["id"],),
+    ).fetchone()[0] == 0
+    connection.close()
+
+
+def test_illicit_actor_selection_uses_context_and_cooldown(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="9e" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    eligible = connection.execute(
+        """
+        SELECT r.id FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.alive=1 AND l.current_stage IN ('teen','adult','senior') ORDER BY r.id
+        """
+    ).fetchall()
+    actor_id = int(eligible[-1][0])
+    calm_traits = dumps({
+        "risk": 0, "spontaneity": 0, "conscientiousness": 100,
+        "agreeableness": 100, "empathy": 100,
+    })
+    pressured_traits = dumps({
+        "risk": 100, "spontaneity": 100, "conscientiousness": 0,
+        "agreeableness": 0, "empathy": 0,
+    })
+    connection.execute(
+        "UPDATE residents SET traits_json=? WHERE id IN (%s)" % ",".join("?" for _ in eligible),
+        (calm_traits, *(int(row[0]) for row in eligible)),
+    )
+    connection.execute("UPDATE residents SET traits_json=? WHERE id=?", (pressured_traits, actor_id))
+    connection.execute(
+        "UPDATE resident_season_state SET stress=0 WHERE season_id=?", (season["id"],)
+    )
+    connection.execute(
+        "UPDATE resident_season_state SET stress=100 WHERE season_id=? AND resident_id=?",
+        (season["id"], actor_id),
+    )
+    connection.execute(
+        "UPDATE resident_needs SET satisfaction=95 WHERE season_id=?", (season["id"],)
+    )
+    connection.execute(
+        "UPDATE resident_needs SET satisfaction=0 WHERE season_id=? AND resident_id=?",
+        (season["id"], actor_id),
+    )
+    connection.execute(
+        "UPDATE financial_accounts SET opening_balance_cents=500000 WHERE resident_id IS NOT NULL AND name='Personal chequing'"
+    )
+    connection.execute(
+        "UPDATE financial_accounts SET opening_balance_cents=0 WHERE resident_id=? AND name='Personal chequing'",
+        (actor_id,),
+    )
+    connection.execute(
+        """
+        UPDATE relationships SET trust=0,tension=100,resentment=100
+        WHERE season_id=? AND (resident_a=? OR resident_b=?)
+        """,
+        (season["id"], actor_id, actor_id),
+    )
+
+    ranked = illicit_actor_candidates(connection, int(season["id"]), 0, 0)
+    assert ranked[0]["residentId"] == actor_id
+    assert ranked[0]["factors"]["traits"] > 90
+    assert ranked[0]["factors"]["stress"] == 100
+    assert ranked[0]["factors"]["needs"] == 100
+    assert ranked[0]["factors"]["finances"] == 100
+    assert ranked[0]["factors"]["opportunity"] > 0
+    assert ranked[0]["factors"]["relationships"] > 0
+
+    connection.execute(
+        """
+        INSERT INTO life_events(
+          season_id,tick,event_type,subject_resident_id,title,summary,severity,created_at
+        ) VALUES(?,10,'theft',?,'Cooldown fixture','Cooldown fixture',50,'2026-01-01T00:00:00Z')
+        """,
+        (season["id"], actor_id),
+    )
+    cooled = illicit_actor_candidates(connection, int(season["id"]), 1, 288)
+    actor = next(candidate for candidate in cooled if candidate["residentId"] == actor_id)
+    assert actor["onCooldown"] is True
+    assert cooled[0]["residentId"] != actor_id
+    connection.close()
+
+
+def test_consensual_black_market_trade_does_not_receive_theft_penalties(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="9f" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    pairs = connection.execute(
+        "SELECT resident_a,resident_b FROM relationships WHERE season_id=? ORDER BY resident_a,resident_b LIMIT 2",
+        (season["id"],),
+    ).fetchall()
+    trade_pair, theft_pair = pairs
+    for pair in pairs:
+        connection.execute(
+            """
+            UPDATE relationships SET affinity=5,trust=40,tension=22,resentment=11
+            WHERE season_id=? AND resident_a=? AND resident_b=?
+            """,
+            (season["id"], pair["resident_a"], pair["resident_b"]),
+        )
+
+    _illicit_relationship_outcome(
+        connection, int(season["id"]), 100,
+        int(trade_pair["resident_a"]), int(trade_pair["resident_b"]), "black_market",
+    )
+    _illicit_relationship_outcome(
+        connection, int(season["id"]), 101,
+        int(theft_pair["resident_a"]), int(theft_pair["resident_b"]), "theft",
+    )
+    trade = connection.execute(
+        """
+        SELECT affinity,trust,tension,resentment FROM relationships
+        WHERE season_id=? AND resident_a=? AND resident_b=?
+        """,
+        (season["id"], trade_pair["resident_a"], trade_pair["resident_b"]),
+    ).fetchone()
+    theft = connection.execute(
+        """
+        SELECT affinity,trust,tension,resentment FROM relationships
+        WHERE season_id=? AND resident_a=? AND resident_b=?
+        """,
+        (season["id"], theft_pair["resident_a"], theft_pair["resident_b"]),
+    ).fetchone()
+    assert tuple(trade) == (6, 41, 22, 11)
+    assert tuple(theft) == (5, 34, 30, 18)
+    connection.close()
+
+
+def test_commerce_story_events_always_record_subject_and_related_participants(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="a0" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    residents = connection.execute("SELECT id FROM residents ORDER BY id LIMIT 2").fetchall()
+    subject_id, related_id = int(residents[0][0]), int(residents[1][0])
+    transaction_id = int(connection.execute(
+        """
+        INSERT INTO financial_transactions(
+          season_id,tick,category,description,status,external_key,created_at
+        ) VALUES(?,101,'test','Participant fixture','void','participant-fixture','2026-01-01T00:00:00Z')
+        RETURNING id
+        """,
+        (season["id"],),
+    ).fetchone()[0])
+    _story_event(
+        connection, int(season["id"]), 0, 100, "test_event",
+        "Commerce participant plain", "Plain participant fixture",
+        subject_id, related_id,
+    )
+    _story_event(
+        connection, int(season["id"]), 0, 101, "test_transaction_event",
+        "Commerce participant transaction", "Transaction participant fixture",
+        subject_id, related_id, transaction_id=transaction_id,
+    )
+
+    missing = connection.execute(
+        """
+        SELECT sl.id FROM story_ledger sl
+        JOIN life_events le ON le.season_id=sl.season_id AND le.tick=sl.tick
+          AND le.event_type=sl.entry_type AND le.title=sl.headline
+        WHERE sl.headline LIKE 'Commerce participant %' AND (
+          (le.subject_resident_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM story_ledger_participants p
+            WHERE p.ledger_id=sl.id AND p.resident_id=le.subject_resident_id AND p.role='subject'
+          )) OR
+          (le.related_resident_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM story_ledger_participants p
+            WHERE p.ledger_id=sl.id AND p.resident_id=le.related_resident_id AND p.role='related'
+          ))
+        )
+        """
+    ).fetchall()
+    assert missing == []
+    transaction_story = connection.execute(
+        """
+        SELECT life_event_id,transaction_id FROM story_ledger
+        WHERE headline='Commerce participant transaction'
+        """
+    ).fetchone()
+    assert transaction_story["life_event_id"] is None
+    assert transaction_story["transaction_id"] == transaction_id
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM story_ledger_participants p JOIN story_ledger sl ON sl.id=p.ledger_id
+        WHERE sl.headline LIKE 'Commerce participant %'
+        """
+    ).fetchone()[0] == 4
     connection.close()
 
 

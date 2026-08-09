@@ -2,9 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["title", "narrative"],
+  "required": ["title", "narrative", "ledgerIds", "residentSlugs"],
   "properties": {
     "title": {"type": "string", "maxLength": 160},
-    "narrative": {"type": "string", "maxLength": 1200}
+    "narrative": {"type": "string", "maxLength": 1200},
+    "ledgerIds": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1}
+    },
+    "residentSlugs": {
+      "type": "array",
+      "maxItems": 24,
+      "uniqueItems": true,
+      "items": {"type": "string", "maxLength": 80}
+    }
   }
 }

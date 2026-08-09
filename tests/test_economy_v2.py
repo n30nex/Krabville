@@ -8,8 +8,10 @@ from krabville.economy_v2 import (
     MAX_BALANCE_CENTS,
     MAX_DAILY_FLOW_CENTS,
     SETTLEMENT_MINUTE,
+    categorized_flow_totals,
     ledger_is_balanced,
     settle_day,
+    settle_household_costs,
 )
 
 
@@ -147,3 +149,38 @@ def test_empty_settlement_is_valid_without_fake_entries() -> None:
         "investments_cents": 0,
     }
     assert result["settled_minute"] == SETTLEMENT_MINUTE
+
+
+def test_settlement_exposes_balanced_categorized_flows() -> None:
+    result = settle_day(
+        {
+            "balances": {"bank_cents": 50_000},
+            "employment": {"hourly_wage_cents": 3_000, "worked_minutes": 60},
+            "expenses": {"housing": 5_500, "utilities": 700},
+        }
+    )
+
+    assert result["flow_totals_cents"] == categorized_flow_totals(result["ledger"])
+    assert result["flow_totals_cents"]["wages"] == 3_000
+    assert result["flow_totals_cents"]["housing"] == 5_500
+    assert result["flow_totals_cents"]["utilities"] == 700
+    assert ledger_is_balanced(result["ledger"])
+
+
+def test_shared_costs_settle_once_from_household_funds() -> None:
+    balances = {"cash_cents": 2_000, "bank_cents": 20_000}
+    costs = {"housing": 8_000, "utilities": 1_200, "food": 2_500}
+    original_balances = deepcopy(balances)
+    original_costs = deepcopy(costs)
+
+    result = settle_household_costs(balances, costs, childcare_cents=1_500)
+
+    assert balances == original_balances
+    assert costs == original_costs
+    assert result["payer"] == "household"
+    assert result["totals"]["expenses_cents"] == 11_700
+    assert result["totals"]["childcare_cents"] == 1_500
+    assert result["balances"]["bank_cents"] == 6_800
+    assert result["balances"]["cash_cents"] == 2_000
+    assert result["flow_totals_cents"]["housing"] == 8_000
+    assert ledger_is_balanced(result["ledger"])

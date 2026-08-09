@@ -1,4 +1,4 @@
-# Krabville KVsim v2.1
+# Krabville KVsim v2.2
 
 [![CI](https://github.com/n30nex/Krabville/actions/workflows/ci.yml/badge.svg)](https://github.com/n30nex/Krabville/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-5fd6df.svg)](LICENSE)
@@ -8,7 +8,14 @@ Krabville is a persistent, event-driven social simulation built for
 workplaces, schools, shops, and public spaces while their needs, families,
 finances, goals, memories, beliefs, and relationships shape what happens next.
 
-KVsim 2.1 expands everyday life with 518 useful goods, visible clothing and
+KVsim 2.2 makes the simulated history authoritative and the residents more
+deliberate. Decisions now combine needs with traits, routines, life goals,
+relationships, memories, health, care, money, possessions, weather, travel,
+venue hours, fatigue, and recent actions. Verified chronicles are rebuilt from
+the real ledger, while housing recovery and categorized money flows make the
+public story and economy match the database.
+
+The v2.1 foundation includes 518 useful goods, visible clothing and
 wardrobes, needs-driven shopping and item use, employer-funded wages, real
 service spending, moving business balances, shared apartments, and denser
 economy and population analytics. The expanded Lagoon has four complete
@@ -19,7 +26,7 @@ spring through winter without moving the roads residents follow.
 
 ## A Season At A Glance
 
-| Rule | KVsim v2.1 behavior |
+| Rule | KVsim v2.2 behavior |
 | --- | --- |
 | World clock | Five in-world minutes every 12.5 real seconds |
 | Season length | Seven in-world days over seven real hours |
@@ -100,6 +107,11 @@ Structured fiction jobs use **GPT-5.3 Codex Spark at low reasoning** first and
 single-threaded, invokes no tools, and cannot block world ticks. An attempt is
 reserved atomically before launch, including failed or interrupted calls.
 
+Resident intents and reflections are batched for all 24 supported residents,
+keeping the planned season under 60 jobs. Two consecutive Spark failures for a
+job kind open a same-day circuit; Luna handles that kind until one Spark probe
+is allowed the following day.
+
 Each season has a hard ceiling of 150 attempts and a 1,500,000-token preflight
 guard. When the allowance is exhausted, the public UI shows a degraded model
 lane and the deterministic simulation continues. No completed season can queue
@@ -148,7 +160,7 @@ and private operational details are never serialized by the public API.
 
 ## API
 
-`/api/v3` is the KVsim v2.1 public contract:
+`/api/v3` is the KVsim v2.2 public contract:
 
 - `GET /api/v3/state`
 - `GET /api/v3/events`

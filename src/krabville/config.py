@@ -50,6 +50,7 @@ class Settings:
     intermission_seconds: int = 600
     max_population: int = 32
     max_adults: int = 24
+    release_commit: str = "unknown"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -98,6 +99,7 @@ class Settings:
             ),
             max_population=max(12, int(os.environ.get("KRABVILLE_MAX_POPULATION", "32"))),
             max_adults=max(8, int(os.environ.get("KRABVILLE_MAX_ADULTS", "24"))),
+            release_commit=os.environ.get("KRABVILLE_RELEASE_COMMIT", "unknown")[:64],
         )
 
     def ensure_directories(self) -> None:

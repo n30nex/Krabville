@@ -34,6 +34,18 @@ class AlwaysFailProvider:
         raise RuntimeError("simulated interrupted request")
 
 
+class PrimaryFailProvider:
+    def __init__(self, primary: str):
+        self.primary = primary
+        self.calls = []
+
+    def complete(self, job, model, reasoning):
+        self.calls.append(model)
+        if model == self.primary:
+            raise ValueError("synthetic schema mismatch")
+        return FakeProvider().complete(job, model, reasoning)
+
+
 def test_codex_prompt_uses_the_tv14_story_boundary(settings_factory) -> None:
     settings = settings_factory()
     prompt = CodexProvider(settings, settings.database_path)._prompt(
@@ -127,6 +139,30 @@ def test_call_150_can_start_but_151_cannot(settings_factory) -> None:
     connection.close()
 
 
+def test_one_point_five_million_token_guard_is_hard(settings_factory) -> None:
+    settings = settings_factory(token_guard=1_500_000)
+    connection = initialize(settings)
+    season_id = start_season(connection, seed_hex="68" * 32)["seasonId"]
+    connection.execute(
+        """
+        INSERT INTO model_usage(
+          season_id,attempt_number,model,status,total_tokens,reserved_at,completed_at
+        ) VALUES(?,1,'fixture','complete',1492001,'now','now')
+        """,
+        (season_id,),
+    )
+    assert process_one(connection, settings, FakeProvider())
+    assert connection.execute(
+        "SELECT COUNT(*) FROM model_usage WHERE season_id=?", (season_id,)
+    ).fetchone()[0] == 1
+    job = connection.execute(
+        "SELECT status,error_code FROM model_jobs WHERE season_id=? ORDER BY id LIMIT 1",
+        (season_id,),
+    ).fetchone()
+    assert tuple(job) == ("failed", "budget_exhausted")
+    connection.close()
+
+
 def test_completed_worker_restart_makes_no_calls(settings_factory) -> None:
     settings = settings_factory()
     connection = initialize(settings)
@@ -208,3 +244,103 @@ def test_provider_tool_events_fail_closed(tmp_path: Path) -> None:
 def test_provider_rejects_operational_text(unsafe: str) -> None:
     with pytest.raises(ValueError, match="operational data"):
         _validate("season_opener", {"headline": "A safe title", "publicNote": unsafe})
+
+
+def test_chronicle_references_must_match_the_authoritative_context() -> None:
+    context = {
+        "ledger": [{"id": 41, "residents": ["hana-sato"]}],
+        "residentAllowlist": [{"slug": "hana-sato", "name": "Hana Sato"}],
+    }
+    valid = {
+        "title": "A factual day",
+        "narrative": "Hana reviewed the recorded event.",
+        "ledgerIds": [41],
+        "residentSlugs": ["hana-sato"],
+    }
+    assert _validate("chronicle", valid, context)["ledgerIds"] == [41]
+    with pytest.raises(ValueError, match="unknown ledger"):
+        _validate("chronicle", {**valid, "ledgerIds": [99]}, context)
+    with pytest.raises(ValueError, match="unknown resident"):
+        _validate("chronicle", {**valid, "residentSlugs": ["mara"]}, context)
+
+
+def test_resident_batches_cover_the_full_population_cap() -> None:
+    residents = [{"slug": f"resident-{index}"} for index in range(24)]
+    items = [
+        {
+            "slug": resident["slug"],
+            "intention": "Complete a useful task.",
+            "reflection": "The day changed one practical choice.",
+            "publicThought": "I know what to do next.",
+        }
+        for resident in residents
+    ]
+    assert len(_validate("resident_intent", {"items": items}, {"residents": residents})["items"]) == 24
+    with pytest.raises(ValueError, match="one to twenty-four"):
+        _validate(
+            "resident_reflection",
+            {"items": items + [{**items[0], "slug": "resident-24"}]},
+            {"residents": residents + [{"slug": "resident-24"}]},
+        )
+
+
+def test_intent_preferences_are_allowlisted_and_bounded() -> None:
+    context = {"residents": [{"slug": "hana-sato"}]}
+    base = {
+        "slug": "hana-sato",
+        "intention": "Finish useful work.",
+        "reflection": "The plan is practical.",
+        "publicThought": "I will focus for a while.",
+        "preferenceTags": ["Useful Work", "community"],
+    }
+    valid = _validate(
+        "resident_intent", {"items": [{**base, "preferredAction": "pursue_purpose"}]}, context,
+    )["items"][0]
+    rejected = _validate(
+        "resident_intent", {"items": [{**base, "preferredAction": "run_shell"}]}, context,
+    )["items"][0]
+    assert valid["preferredAction"] == "pursue_purpose"
+    assert valid["preferenceTags"] == ["useful work", "community"]
+    assert rejected["preferredAction"] == ""
+
+
+def test_two_primary_schema_failures_open_a_same_day_kind_circuit(settings_factory) -> None:
+    settings = settings_factory()
+    connection = initialize(settings)
+    season_id = start_season(connection, seed_hex="67" * 32)["seasonId"]
+    _queue_job(connection, season_id, 0, 1, "season_opener", 0, {"fixture": 2})
+    _queue_job(connection, season_id, 0, 2, "season_opener", 0, {"fixture": 3})
+    provider = PrimaryFailProvider(settings.primary_model)
+
+    assert process_one(connection, settings, provider)
+    assert process_one(connection, settings, provider)
+    assert process_one(connection, settings, provider)
+
+    assert provider.calls == [
+        settings.primary_model,
+        settings.fallback_model,
+        settings.primary_model,
+        settings.fallback_model,
+        settings.fallback_model,
+    ]
+    circuit = connection.execute(
+        """
+        SELECT status,consecutive_failures FROM model_circuits
+        WHERE season_id=? AND day=0 AND job_kind='season_opener' AND model=?
+        """,
+        (season_id, settings.primary_model),
+    ).fetchone()
+    assert tuple(circuit) == ("open", 2)
+    failures = list(
+        connection.execute(
+            """
+            SELECT error_class,duration_ms FROM model_usage
+            WHERE season_id=? AND model=? AND status='failed'
+            """,
+            (season_id, settings.primary_model),
+        )
+    )
+    assert len(failures) == 2
+    assert all(row["error_class"] == "schema_validation" for row in failures)
+    assert all(int(row["duration_ms"]) >= 0 for row in failures)
+    connection.close()

@@ -75,6 +75,7 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   await expect(dossier.getByRole("button", { name: "Money", exact: true })).toBeVisible();
   await dossier.getByRole("button", { name: "Needs", exact: true }).click();
   await expect(page.locator("#dossier-needs .section-label").first()).toContainText("high is healthy");
+  await expect(page.locator("#dossier-life-goals")).toContainText(/complete|long-term goal/i);
   const satisfaction = await page.locator("#dossier-needs .need-row").evaluateAll((rows) => rows.map((row) => Number((row as HTMLElement).dataset.satisfaction)));
   expect(satisfaction.every((value) => value >= 0 && value <= 100)).toBe(true);
   await dossier.getByRole("button", { name: "Health", exact: true }).click();
@@ -88,6 +89,9 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   await page.locator('[data-explore="bank"]').click();
   await expect(page.locator("#explore-view")).toBeVisible();
   await expect(page).toHaveURL(/#\/explore\/bank$/);
+  await expect(page.locator(".economy-indicators")).toContainText("Retail volume");
+  await expect(page.locator(".economy-indicators")).toContainText("Employment");
+  await expect(page.locator(".bank-analysis")).toContainText("Business activity");
   await expect(page.locator(".bank-ledger button[data-resident]").first()).toBeVisible();
   await page.locator("#explore-close").click();
   await expect(page).not.toHaveURL(/#\/explore\//);
@@ -121,8 +125,16 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
 
   await page.locator('[data-explore="analytics"]').click();
   await expect(page.locator(".analytics-hero")).toContainText("Analytics Lab");
+  await expect(page.locator(".analytics-kpis")).toContainText("Story evidence");
+  await expect(page.locator(".analytics-kpis")).toContainText("Care coverage");
   await expect(page.locator(".analytics-grid .bar-chart").first()).toBeVisible();
   await expect(page.locator(".analytics-grid .line-chart").first()).toBeVisible();
+  await page.locator("#explore-close").click();
+
+  await page.locator('[data-explore="story"]').click();
+  await expect(page.locator(".docket-status")).toContainText("Factual story docket");
+  await expect(page.locator(".docket-status")).toContainText(/authoritative|verified/i);
+  await expect(page.locator(".life-goal-list").first()).toContainText(/complete|Long-term goals/i);
   await page.locator("#explore-close").click();
 
   await expect(page.locator("#map-vote-trigger")).toBeVisible();
@@ -150,6 +162,45 @@ test("directory deep links open after the first state load", async ({ page }) =>
   await expect(page.locator("#explore-view")).toBeVisible();
   await expect(page.locator("#explore-title")).toHaveText("Bank & economy");
   await expect(page.locator('[data-explore="bank"]')).toHaveClass(/active/);
+});
+
+test("a zero-vote winner is labelled as a town selection", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "1366x768", "poll source rendering runs once at desktop size");
+  await page.route("**/api/v3/state", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.poll = {
+      id: 9001,
+      day: payload.season?.day ?? 0,
+      status: "closed",
+      opensTick: 24,
+      closesTick: 264,
+      totalVotes: 0,
+      selectionSource: "town",
+      winnerLabel: "Town selected",
+      options: [
+        { choiceId: "A", title: "Lantern repair", category: "civic", preview: "Repair the harbour lights.", votes: 0, winner: true },
+        { choiceId: "B", title: "Market day", category: "economy", preview: "Open a public market.", votes: 0, winner: false },
+      ],
+    };
+    await route.fulfill({ response, json: payload });
+  });
+  await page.goto("/");
+  await expect(page.locator("#map-vote-trigger")).toContainText("Town selected: Lantern repair");
+});
+
+test("v2.2 public event kinds reach the live ticker", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "1366x768", "SSE subscription coverage runs once at desktop size");
+  await page.route("**/api/v3/events/stream", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "Cache-Control": "no-cache" },
+      body: 'id: 9001\nevent: verified_chronicle\ndata: {"payload":{"title":"Day 2 facts verified"}}\n\n',
+    });
+  });
+  await page.goto("/");
+  await expect(page.locator("#live-ticker")).toHaveText("Verified chronicle: Day 2 facts verified");
 });
 
 test("every directory route, home focus, clothing, and semantic inventory controls work", async ({ page }, testInfo) => {

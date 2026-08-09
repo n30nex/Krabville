@@ -1,7 +1,7 @@
 name: krabville
 
 x-runtime: &runtime
-  image: krabville:2.1.3
+  image: krabville:2.2.0
   build:
     context: .
   user: "${KRABVILLE_UID:-1000}:${KRABVILLE_GID:-1000}"
@@ -35,6 +35,7 @@ x-runtime: &runtime
     KRABVILLE_INTERMISSION_SECONDS: ${KRABVILLE_INTERMISSION_SECONDS:-600}
     KRABVILLE_MAX_POPULATION: ${KRABVILLE_MAX_POPULATION:-32}
     KRABVILLE_MAX_ADULTS: ${KRABVILLE_MAX_ADULTS:-24}
+    KRABVILLE_RELEASE_COMMIT: ${KRABVILLE_RELEASE_COMMIT:-unknown}
     KRABVILLE_PUBLIC_ORIGIN: ${KRABVILLE_PUBLIC_ORIGIN:-http://127.0.0.1:18889}
   logging:
     driver: json-file

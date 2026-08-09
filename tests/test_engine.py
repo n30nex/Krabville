@@ -4,6 +4,7 @@ from PIL import Image
 
 import json
 from pathlib import Path
+import pytest
 
 from krabville.content import MAJOR_EVENTS, MICRO_EVENTS, PATH_EDGES, PATH_NODES
 from krabville.db import initialize, loads, now_iso, retrieve_memories
@@ -197,15 +198,17 @@ def test_legacy_week_one_import_is_idempotent(settings_factory) -> None:
     connection.close()
 
 
-def test_residents_persist_across_52_seasons(settings_factory) -> None:
+def test_season_twenty_is_a_hard_boundary(settings_factory) -> None:
     settings = settings_factory()
     connection = initialize(settings)
-    for index in range(52):
+    for index in range(20):
         start_season(connection, seed_hex=f"{index + 1:064x}")
         stop_now(connection)
-    assert connection.execute("SELECT COUNT(*) FROM seasons").fetchone()[0] == 52
+    with pytest.raises(RuntimeError, match="twenty-season"):
+        start_season(connection, seed_hex=f"{21:064x}")
+    assert connection.execute("SELECT COUNT(*) FROM seasons").fetchone()[0] == 20
     assert connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0] == 12
-    assert connection.execute("SELECT MAX(number) FROM seasons").fetchone()[0] == 52
+    assert connection.execute("SELECT MAX(number) FROM seasons").fetchone()[0] == 20
     connection.close()
 
 
