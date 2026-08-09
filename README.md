@@ -178,6 +178,8 @@ adapter. SSE clients can resume from their last sequence ID.
 
 ## Local Development
 
+The controlling roadmap for the next release is [KVsim 2.3 - Trust, Clarity, and Performance](docs/KVSIM_2.3_IMPLEMENTATION_PLAN.md). Its exact starting point and non-goals are locked in [the v2.2 release baseline](docs/RELEASE_BASELINE_V22.md).
+
 Requirements: Python 3.13, Node.js with npm, and Docker with Compose for the
 container workflow.
 
