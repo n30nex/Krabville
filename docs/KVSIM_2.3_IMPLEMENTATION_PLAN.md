@@ -570,7 +570,369 @@ A paused, completed, or intermission season is healthy. A stale or repeatedly fa
 
 ## 6. Implementation phases
 
-### Phase 0 — Freeze and rep…70 tokens truncated…, and commerce.
+### Phase 0 — Freeze and reproduce the v2.2 baseline
+
+#### Goal
+
+Make the existing validation reproducible before changing transport, state, or navigation.
+
+#### Deliverables
+
+1. `docs/RELEASE_BASELINE_V22.md`
+2. `scripts/verify-release.sh` or a cross-platform Python equivalent
+3. Required Playwright CI
+4. Version/commit/schema consistency check
+5. Retained v2.2 production-compatible migration fixture
+6. Deterministic golden-seed fixture and invariant report
+
+#### Required work
+
+- Record the expected release version, commit, schema migration, API version, asset manifest, supported viewports, and current test commands.
+- Run Playwright in CI for desktop, mobile, and reduced motion.
+- Store traces, screenshots, console errors, server logs, and failing API payloads as artifacts.
+- Add formatting/linting without broad unrelated reformatting.
+- Establish coverage and performance baselines before setting hard thresholds.
+- Verify that a copied v2.2 database migrates, opens, serves state, advances ticks, and passes foreign-key/accounting checks.
+- Add a script that verifies:
+  - `pyproject.toml` version;
+  - frontend package version;
+  - Python `__version__`;
+  - Compose image version;
+  - release commit configuration;
+  - Git tag/release input during release workflow.
+
+#### Exit criteria
+
+- The same verification entrypoint works locally and in CI.
+- Browser coverage is mandatory, not described only in a release PR.
+- The v2.2 migration fixture is retained and documented.
+- Golden-seed output and invariant reports are stored as artifacts.
+- No 2.3 feature PR merges before this phase is green.
+
+---
+
+### Phase 1 — Trust, observability, and recovery
+
+#### Goal
+
+Make failures visible, bounded, and recoverable.
+
+#### Runtime metrics
+
+At minimum expose:
+
+- release version and commit;
+- schema version and migration checksum state;
+- season ID/number/status;
+- latest committed tick;
+- last successful tick time;
+- tick age;
+- last and p95 tick duration;
+- tick deadline misses;
+- repeated failure count for the current tick;
+- last event sequence;
+- SSE connected clients and reconnects;
+- state/read-model build time and bytes;
+- model queue depth and oldest queued-job age;
+- model fallback/circuit state;
+- last verified backup metadata;
+- process start time and restart count where available.
+
+#### Tick failure handling
+
+Wrap the engine loop around `advance_tick()`:
+
+1. Let the transaction rollback.
+2. Record a structured incident using a separate connection.
+3. Retry the same authoritative tick with bounded exponential backoff.
+4. Never skip the tick.
+5. After the configured threshold, stop progression and mark engine readiness degraded.
+6. Keep the process responsive for diagnosis and operator action.
+7. Expose the exception class, sanitized message, tick, season, first/last occurrence, and attempt count.
+8. Add a management operation to clear/resume only after the underlying failure has been addressed.
+
+#### Migration ownership
+
+- Add a one-shot `migrate`/`bootstrap` command and Compose service.
+- Web, engine, and inference assert the required schema but do not independently mutate it during ordinary startup.
+- Add checksums to migration metadata and reject modified applied migrations.
+- Preserve a safe local-development command that performs migration explicitly.
+
+#### Backup and restore
+
+Backups must include a sidecar or embedded metadata report containing:
+
+- release commit;
+- schema level/checksum;
+- season/tick;
+- creation time;
+- database checksum;
+- `quick_check` and foreign-key results.
+
+`verify-backup` must open read-only and validate the metadata. `restore --dry-run` must restore into a disposable location and prove that public reads and a short fake-provider replay work.
+
+#### Exit criteria
+
+- A deliberately injected tick failure produces a useful incident and does not create a rapid crash loop.
+- Health distinguishes live, ready, paused, completed, stale, and degraded states.
+- Exactly one deployment step owns migrations and seeding.
+- Backup verification and disposable restore pass in CI.
+- Production operators have a documented rollback path.
+
+---
+
+### Phase 2 — Live-state contract and SSE-first delivery
+
+#### Goal
+
+Remove the complete five-second state refresh from the normal connected experience.
+
+#### Step 1: profile the existing path
+
+Measure and save:
+
+- SQL query count and database time for `/api/v3/state`;
+- serialization time;
+- uncompressed/compressed payload size;
+- browser parse time;
+- DOM/render time;
+- refresh frequency per client;
+- SSE event rate and reconnect rate;
+- browser memory before and after ten minutes;
+- server memory and CPU with multiple synthetic viewers.
+
+#### Step 2: add focused read models
+
+Implement and test `/api/v3/bootstrap`, `/api/v3/world`, and `/api/v3/stories`. Keep `/api/v3/state` unchanged for compatibility.
+
+#### Step 3: add a normalized client store
+
+The store owns:
+
+- release/capabilities;
+- connection state;
+- current sequence;
+- season/time/weather;
+- residents by slug;
+- properties by slug when loaded;
+- stories by ID;
+- current poll;
+- visible world props;
+- selected/followed resident;
+- stale/degraded state.
+
+Views subscribe to store changes. The event stream is opened once.
+
+#### Step 4: implement gap recovery
+
+- Send `Last-Event-ID` on reconnect.
+- Detect a non-contiguous sequence.
+- Backfill with `/api/v3/events?after=`.
+- If the gap cannot be filled, request a compact world reconciliation.
+- Recover cleanly across season transitions.
+- Preserve the selected route and open panel during reconnection.
+
+#### Step 5: retire normal five-second state polling
+
+After parity tests pass:
+
+- use SSE for steady-state updates;
+- reconcile every 30–60 seconds, on visibility return, and after reconnect;
+- use ETags for bootstrap/reconciliation;
+- retain full `/state` only for compatibility, diagnostics, tests, and emergency fallback;
+- show a visible stale/reconnecting state when neither SSE nor reconciliation is current.
+
+#### Exit criteria
+
+- A connected client does not call `/api/v3/state` every five seconds.
+- Disconnect/reconnect and dropped-event tests pass.
+- Sequence gaps recover without page reload.
+- The current route, selected resident, map camera, and open drawer survive normal live updates.
+- Server query count and network bytes are materially reduced from the saved baseline.
+
+---
+
+### Phase 3 — Shared authority and causal evidence
+
+#### Goal
+
+Eliminate client-created facts and make the existing simulation easier to explain.
+
+#### World manifest
+
+- Generate or serve the manifest.
+- Validate coordinates, map bounds, property mappings, atlas frame counts, asset dimensions, and hashes in CI.
+- Replace the frontend location table with manifest data.
+- Keep legacy coordinate projection only behind an explicit compatibility adapter with a removal issue.
+
+#### Decision explanations
+
+- Ensure every current decision route returns the authoritative selected action, alternatives, factors, constraints, destination, expected duration, confidence, and IDs.
+- Remove the unlabelled client heuristic forecast.
+- Add contract tests proving the resident card, dossier, map peek, and API all show the same decision.
+- Ensure decision explanations remain available when the model lane is disabled.
+
+#### Minimum causal evidence
+
+For new 2.3 records, ensure a visitor can traverse at least:
+
+```text
+town event or vote
+  → resident decision
+  → activity/conversation/purchase/care/health/housing change
+  → goal/relationship/financial/story evidence
+```
+
+Prefer existing IDs and evidence tables. If a schema addition is required, use one generic `causal_links` table with typed source/target references and a relation name.
+
+#### Exit criteria
+
+- The frontend no longer owns independent location or decision-ranking logic.
+- All Watch story claims link to authoritative records.
+- A decision and its explanation are identical across all public views.
+- Model failure cannot remove deterministic decision evidence.
+
+---
+
+### Phase 4 — Loading and rendering performance
+
+#### Goal
+
+Make Krabville usable quickly on ordinary mobile and desktop connections.
+
+#### Asset strategy
+
+1. Render the HTML shell and Watch content before Phaser.
+2. Dynamically import the game module after bootstrap.
+3. Load only the active seasonal exterior map.
+4. Load the core resident/life-stage art required for visible residents.
+5. Lazy-load interiors when a building is opened.
+6. Lazy-load inventory art when an inventory becomes visible.
+7. Load event props only when a visible event needs them.
+8. Generate mobile and desktop map variants.
+9. Prefetch the next seasonal map shortly before transition, not at startup.
+10. Add immutable caching for content-addressed or versioned assets.
+
+#### Rendering strategy
+
+- Avoid replacing complete lists on every event.
+- Use event delegation instead of reattaching handlers after every render.
+- Update resident sprites only when relevant fields change.
+- Throttle or coalesce high-frequency visual updates.
+- Suspend non-essential animation when the document is hidden.
+- Honour reduced motion throughout Phaser and DOM animation.
+- Measure browser memory and WebGL texture usage.
+
+#### Performance targets
+
+Targets are gates after the baseline measurement is committed:
+
+| Metric | KVsim 2.3 target |
+|---|---:|
+| Desktop initial compressed transfer | **≤ 8 MiB** at 1366×768 |
+| Mobile initial compressed transfer | **≤ 6 MiB** at 375×812 |
+| Bootstrap response | **≤ 300 KiB gzip** |
+| Compact world reconciliation | **≤ 150 KiB gzip** |
+| Ordinary SSE event | **≤ 20 KiB** |
+| Normal full-state polling | **0 calls** while connected |
+| Shell visible | **≤ 1.5 s** on 10 Mbps / 4× CPU synthetic profile |
+| Map interactive | **≤ 3.5 s** on the same profile |
+| Sequence-gap recovery | **≤ 5 s** for an available backfill |
+| Tick duration regression | **< 10%** versus committed v2.2 baseline |
+| Browser console/page errors | **0** |
+
+If a target proves inappropriate on the measured reference environment, change it only in a dedicated benchmark PR with evidence and a written rationale.
+
+#### Exit criteria
+
+- Interior and event-prop atlases are not part of an ordinary first map load.
+- Mobile uses an appropriately sized map asset.
+- Initial transfer and interactive targets pass in CI.
+- Ten-minute browser memory does not grow without bound.
+- The HTML Watch experience remains useful when WebGL is unavailable.
+
+---
+
+### Phase 5 — Story-first public interface
+
+#### Goal
+
+Turn the existing data-rich interface into a coherent spectator experience.
+
+#### Watch implementation
+
+- Add `/watch` or `#/watch` as the default route.
+- Render active stories from `/api/v3/stories`.
+- Selecting a story focuses its place and participants on the map.
+- Selecting a resident opens the Overview section first.
+- Evidence links open the relevant decision, ledger, event, property, or season detail.
+- An open vote remains visible in Watch mode and does not require entering a separate analytics view.
+
+#### Navigation implementation
+
+- Replace the seven peer top-level destinations with the five-group structure.
+- Preserve old hash routes and redirect them to the correct new section.
+- Keep Economy and Analytics reachable under Town/Inspect.
+- Keep direct archive and property routes working.
+
+#### Resident implementation
+
+- Build the five grouped sections.
+- Preserve all existing detailed fields.
+- Add compact decision explanation and top alternative to Overview.
+- Add follow mode:
+  - camera follows the resident without preventing manual override;
+  - a compact card shows destination, ETA, activity, reason, and urgent obligation;
+  - route remains shareable;
+  - follow state survives live updates and reconnection.
+
+#### Map overlays
+
+Allow one optional overlay at a time:
+
+- active story;
+- urgent needs/care;
+- relationships;
+- economy/shortages;
+- public services;
+- weather effects.
+
+Default map remains uncluttered.
+
+#### Exit criteria
+
+A first-time visitor can complete this acceptance script on desktop and mobile:
+
+1. Identify the current town development.
+2. Identify at least two involved residents or places.
+3. Open a resident and explain why they are acting.
+4. Find at least one consequence/evidence record.
+5. Locate and use the visitor vote when open.
+6. Return to the same route after a refresh or reconnection.
+
+No step may require opening the raw Analytics Lab.
+
+---
+
+### Phase 6 — Release hardening and 2.3.0
+
+#### Goal
+
+Prove the release on production-compatible data and ship it with a tested rollback.
+
+#### Required release-candidate checks
+
+- Full Python suite.
+- Frontend type, lint, unit, and build checks.
+- Playwright desktop, mobile, compact, and reduced-motion projects.
+- Axe checks on Watch, resident, property, Town, vote, and archive views.
+- Clean install.
+- Upgrade from retained v2.2.0 database fixture.
+- Upgrade from a copy of the current production database.
+- Database `quick_check`, `foreign_key_check`, and accounting reconciliation.
+- Deterministic seed replay.
+- Accelerated full season.
+- Multi-season soak covering season boundaries, lifecycle, housing, care, and commerce.
 - Engine restart during ordinary tick, settlement, new day, poll close, and season close.
 - Model-disabled and provider-failure runs.
 - Backup, verify, disposable restore, and rollback rehearsal.
@@ -1018,5 +1380,3 @@ and a production-compatible v2.3.0 release with tested rollback is prepared.
 - [ ] At least one settlement boundary passes after deployment.
 - [ ] No repeated runtime incidents or unexplained 5xx responses.
 - [ ] Release `v2.3.0` is published with exact commit and migration notes.
-
-
