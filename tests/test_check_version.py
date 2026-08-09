@@ -121,6 +121,16 @@ def test_release_inputs_match_runtime_health_and_schema(
     assert any("does not match HEAD" in error for error in errors)
     assert any("does not match latest migration" in error for error in errors)
 
+    monkeypatch.setattr(version_check, "_git_tag_commit", lambda _root, _tag: None)
+    _, errors = check_repository(
+        ROOT,
+        release_tag=release_tag,
+        release_commit=release_commit,
+        release_schema=metadata["schema"],
+        head_commit=release_commit,
+    )
+    assert f"release tag {release_tag!r} cannot be resolved" in errors
+
     drifted = deepcopy(health)
     drifted["release"]["commit"] = "0" * 40
     drifted["schema"]["version"] = 12

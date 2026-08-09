@@ -129,7 +129,9 @@ def check_repository(
             if release_commit != head:
                 errors.append(f"release commit {release_commit} does not match HEAD {head}")
             tag_commit = _git_tag_commit(root, release_tag)
-            if tag_commit is not None and tag_commit != release_commit:
+            if tag_commit is None:
+                errors.append(f"release tag {release_tag!r} cannot be resolved")
+            elif tag_commit != release_commit:
                 errors.append(
                     f"release tag {release_tag} points to {tag_commit}, not {release_commit}"
                 )
