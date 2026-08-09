@@ -60,3 +60,12 @@ def test_compose_gates_every_runtime_on_one_bootstrap_owner() -> None:
     for service in ("web", "engine", "inference"):
         block = _service_block(compose, service)
         assert "migrate:\n        condition: service_completed_successfully" in block
+
+
+def test_upgrade_stops_existing_runtimes_before_migration_gate() -> None:
+    operations = (ROOT / "docs" / "OPERATIONS.md").read_text(encoding="utf-8")
+    stop = "--profile inference stop inference engine web"
+    start = "--profile inference up -d"
+
+    assert stop in operations
+    assert operations.index(stop) < operations.index(start)
