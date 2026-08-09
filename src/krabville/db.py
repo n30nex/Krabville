@@ -58,6 +58,21 @@ def transaction(connection: sqlite3.Connection, *, immediate: bool = False) -> I
         connection.commit()
 
 
+def required_schema_version() -> int:
+    migration_dir = Path(__file__).with_name("migrations")
+    return max(
+        (int(path.stem.split("_", 1)[0]) for path in migration_dir.glob("*.sql")),
+        default=0,
+    )
+
+
+def applied_schema_version(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+    ).fetchone()
+    return int(row[0])
+
+
 def migrate(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"

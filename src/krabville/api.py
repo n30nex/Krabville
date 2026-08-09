@@ -18,7 +18,16 @@ from . import __version__
 from .commerce_v2 import item_asset_index
 from .config import Settings
 from .content import LOCATION_POINTS
-from .db import connect, dumps, initialize, loads, now_iso, transaction
+from .db import (
+    applied_schema_version,
+    connect,
+    dumps,
+    initialize,
+    loads,
+    now_iso,
+    required_schema_version,
+    transaction,
+)
 from .security import VoteSecurity, new_csrf
 from .runtime_v2 import account_balance, population_target_for_season
 from .world import _season_chapter, _weather, diagnose
@@ -2037,6 +2046,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def runtime_health() -> dict[str, Any]:
         connection = connect(settings.database_path, readonly=True)
         try:
+            schema_version = applied_schema_version(connection)
+            required_schema = required_schema_version()
+            schema_current = schema_version == required_schema
             season = _season(connection)
             result = diagnose(
                 connection,
@@ -2062,7 +2074,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             return {
                 **result,
+                "ok": result["ok"] and schema_current,
+                "status": result["status"] if schema_current else "failed",
                 "release": {"version": __version__, "commit": settings.release_commit},
+                "schema": {
+                    "version": schema_version,
+                    "required": required_schema,
+                    "current": schema_current,
+                },
                 "seasonStatus": season["status"] if season else "draft",
                 "season": season_payload,
                 "models": {
@@ -2090,7 +2109,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/readyz")
     def readyz():
         payload = runtime_health()
-        return JSONResponse(payload, status_code=200 if payload["database"] == "ok" else 503)
+        ready = payload["database"] == "ok" and payload["schema"]["current"]
+        return JSONResponse(payload, status_code=200 if ready else 503)
 
     @app.get("/metrics")
     def metrics():
