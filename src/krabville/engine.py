@@ -9,6 +9,7 @@ from typing import Any
 from .config import Settings
 from .control import ControlServer
 from .db import connect, initialize
+from .observability import configure_logging, log_event
 from .reporter import generate_report
 from .world import (
     advance_tick,
@@ -119,7 +120,17 @@ class Engine:
     def run(self) -> None:
         self.control.start()
         deadline = time.monotonic()
+        snapshot = self._diagnose(self.connection)
+        season = snapshot.get("season") or {}
+        log_event(
+            "engine",
+            "engine_started",
+            season=season.get("number"),
+            tick=season.get("currentTick"),
+            sequence=snapshot["runtime"]["eventSequence"],
+        )
         while not self.stop_event.is_set():
+            started = time.monotonic()
             result = advance_tick(self.connection)
             if result.get("advanced") and int(result.get("tick", 0)) % 36 == 0:
                 queue_conversation_if_needed(self.connection)
@@ -128,6 +139,22 @@ class Engine:
                 continued = self._continue_if_due(self.connection)
                 if continued:
                     result = {"advanced": False, "status": "running", **continued}
+            tick = int(result.get("tick", 0))
+            if result.get("advanced") and tick % 12 == 0:
+                row = self.connection.execute(
+                    "SELECT number FROM seasons ORDER BY number DESC LIMIT 1"
+                ).fetchone()
+                sequence = int(self.connection.execute(
+                    "SELECT COALESCE(MAX(seq),0) FROM event_stream"
+                ).fetchone()[0])
+                log_event(
+                    "engine",
+                    "tick_advanced",
+                    season=int(row["number"]) if row else None,
+                    tick=tick,
+                    sequence=sequence,
+                    elapsedMs=max(0, round((time.monotonic() - started) * 1000)),
+                )
             deadline += self.settings.tick_seconds
             wait = deadline - time.monotonic()
             if not result.get("advanced"):
@@ -142,12 +169,14 @@ class Engine:
 
 
 def main() -> None:
+    configure_logging()
     engine = Engine()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: engine.stop_event.set())
     try:
         engine.run()
     finally:
+        log_event("engine", "engine_stopped")
         engine.close()
 
 
