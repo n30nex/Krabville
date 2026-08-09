@@ -1,5 +1,12 @@
 export type Point = [number, number];
 
+export interface DecisionFactor {
+  kind: string;
+  key: string;
+  weight: number;
+  explanation: string;
+}
+
 export interface DecisionCandidate {
   activity: string;
   destination: string;
@@ -7,6 +14,7 @@ export interface DecisionCandidate {
   confidence?: number | string;
   reason?: string;
   drivers?: string[];
+  factors?: DecisionFactor[];
   etaMinutes?: number;
 }
 
@@ -28,7 +36,120 @@ export interface LedgerEntry {
   title: string;
   summary?: string;
   participants?: string[];
+  participantDetails?: Array<{ slug: string; name: string; role: string }>;
   amount?: number;
+  phase?: string;
+  epilogue?: boolean;
+  verificationStatus?: "verified" | "unverified" | "legacy" | string;
+  verified?: boolean | null;
+}
+
+export interface GoalEvidence {
+  id?: number | string | null;
+  goalId?: number | string | null;
+  goalScope?: "season" | "life" | string;
+  tick: number;
+  kind: string;
+  summary: string;
+  progressDelta: number;
+  ledgerId?: number | string | null;
+  verified: boolean;
+}
+
+export interface CareSchedule {
+  arrangementId: number;
+  resident: string;
+  residentName: string;
+  type: string;
+  typeLabel?: string;
+  status: string;
+  statusLabel?: string;
+  caregiver?: string | null;
+  caregiverSlug?: string | null;
+  day?: number | null;
+  startMinute?: number | null;
+  endMinute?: number | null;
+  costPerDay: number;
+  scheduleLabel?: string;
+}
+
+export interface HealthCondition {
+  id: number;
+  resident: string;
+  residentName: string;
+  key: string;
+  name: string;
+  type: string;
+  typeLabel?: string;
+  severity: number;
+  severityLabel?: string;
+  status: string;
+  statusLabel?: string;
+  contagious: boolean;
+  contagionLabel?: string;
+  provider?: string | null;
+  treatmentCost: number;
+}
+
+export interface HousingRecoveryPlan {
+  id?: number | string | null;
+  householdId?: number | string | null;
+  residentId?: number | string | null;
+  status: string;
+  statusLabel?: string;
+  stage: string;
+  stageLabel?: string;
+  arrearsDays?: number;
+  failedAttempts?: number;
+  stableDays: number;
+  stabilityLabel?: string;
+  nextStep: string;
+}
+
+export interface ModelCircuit {
+  jobKind: string;
+  jobLabel?: string;
+  model?: string | null;
+  status: string;
+  statusLabel?: string;
+  consecutiveFailures: number;
+  day?: number | null;
+  openedDay?: number | null;
+  openedAt?: string | null;
+  probeDay?: number | null;
+  fallbackModel?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface LifeGoal {
+  id: number;
+  resident: string;
+  residentName: string;
+  scope: "life";
+  category: string;
+  description: string;
+  status: string;
+  progress: number;
+  createdSeasonId?: number | null;
+  createdTick?: number;
+  completedSeasonId?: number | null;
+  completedTick?: number | null;
+  evidence: GoalEvidence[];
+  evidenceCount: number;
+}
+
+export interface EconomyIndicators {
+  residentMedianWealth: number;
+  disposableIncome: number;
+  cpi?: number | null;
+  retailVolume: number;
+  businessRevenue: number;
+  businessProfit: number;
+  employmentRate: number;
+  debtDelinquencyRate: number;
+  delinquentDebts: number;
+  wealthGini: number;
+  shelterOccupancy: number;
 }
 
 export interface FamilyLink {
@@ -137,6 +258,7 @@ export interface Resident {
   wants?: PublicNote[];
   aspirations?: PublicNote[];
   decisionCandidates?: DecisionCandidate[];
+  decisionFactors?: DecisionFactor[];
   pondering?: { active?: boolean; thought: string; urgentNeeds?: string[]; untilTick?: number };
   urgentNeeds?: string[];
   spriteVariant?: number;
@@ -148,10 +270,13 @@ export interface Resident {
   beliefs?: PublicNote[];
   health?: {
     status?: string;
+    careStatus?: string;
     conditions?: string[];
     care?: string[];
     caregiver?: string;
     stress?: number;
+    conditionDetails?: HealthCondition[];
+    careSchedules?: CareSchedule[];
   };
   career?: {
     title?: string;
@@ -180,6 +305,17 @@ export interface Resident {
   homeInventory?: InventoryItem[];
   transactions?: Array<{ id: number; tick: number; category: string; description: string; amount: number }>;
   lifeLedger?: LedgerEntry[];
+  goalEvidence?: GoalEvidence[];
+  housingRecovery?: {
+    available: boolean;
+    trackingLabel?: string;
+    inShelter: boolean;
+    shelter?: string | null;
+    stateLabel?: string;
+    recoveryLabel?: string;
+    plans: HousingRecoveryPlan[];
+  };
+  lifeGoals?: LifeGoal[];
   updatedTick: number;
 }
 
@@ -204,6 +340,9 @@ export interface Poll {
   question?: string;
   allowChange?: boolean;
   appliesOnDay?: number;
+  totalVotes?: number;
+  selectionSource?: "visitors" | "town" | null;
+  winnerLabel?: string | null;
 }
 
 export interface KrabvilleState {
@@ -263,6 +402,7 @@ export interface KrabvilleState {
     models: Record<string, { calls: number; tokens: number }>;
   };
   events: Array<{ seq: number; tick: number; type: string; payload: Record<string, unknown>; createdAt: string }>;
+  eventKinds?: string[];
   conversations: Array<{
     tick: number;
     residentA: string;
@@ -274,15 +414,19 @@ export interface KrabvilleState {
     summary: string;
   }>;
   goals: Array<{
+    id?: number;
     resident: string;
     residentName: string;
     scope: string;
     description: string;
     status: string;
     progress: number;
+    evidence?: GoalEvidence[];
+    evidenceCount?: number;
   }>;
+  lifeGoals?: LifeGoal[];
   props: Array<{ location: string; prop: string; status: string; createdTick: number }>;
-  chronicles: Array<{ day: number; title: string; narrative: string }>;
+  chronicles: Array<{ day: number; title: string; narrative: string; source?: string; ledgerIds?: number[]; verificationStatus?: string; verified?: boolean | null }>;
   report: null | { headline: string; narrative: string; poster: string; statistics: Record<string, unknown> };
   ledger?: LedgerEntry[];
   households?: HouseholdSummary[];
@@ -311,6 +455,16 @@ export interface KrabvilleState {
     businessRevenue?: number;
     serviceRevenue?: number;
     goodsSold?: number;
+    indicators?: EconomyIndicators;
+    metricHistory?: Array<{
+      day: number;
+      residentMedianWealth?: number | null;
+      disposableIncome: number;
+      cpi?: number | null;
+      retailVolume: number;
+      businessRevenue: number;
+      businessProfit: number;
+    }>;
   };
   families?: Array<{ id?: string | number; name: string; members: FamilyLink[]; summary?: string }>;
   properties?: PropertySummary[];
@@ -341,8 +495,33 @@ export interface KrabvilleState {
       activeLeases: number; apartments: number; apartmentResidents: number;
       apartmentCapacity: number; sharedBuildings: number;
     };
+    economy?: EconomyIndicators;
+    care?: { scheduledBlocks: number; dependents: number };
+    health?: { activeConditions: number; recovering: number; contagious: number };
   };
   townEvents?: LedgerEntry[];
+  ledgerVerification?: { available: boolean; verified: number; unverified: number; legacy: number; participantLinks: number };
+  epilogues?: LedgerEntry[];
+  goalEvidence?: GoalEvidence[];
+  careSchedules?: CareSchedule[];
+  healthConditions?: HealthCondition[];
+  housingRecovery?: {
+    available: boolean;
+    trackingLabel?: string;
+    shelterResidents: number;
+    shelterHouseholds: number;
+    residents: Array<{ slug: string; name: string; household: string; shelter: string }>;
+    plans: HousingRecoveryPlan[];
+  };
+  modelCircuits?: { available: boolean; summaryLabel?: string; circuits: ModelCircuit[] };
+  docket?: {
+    source: string;
+    entries: LedgerEntry[];
+    activeGoals: KrabvilleState["goals"];
+    lifeGoals?: LifeGoal[];
+    epilogues: LedgerEntry[];
+    verification?: KrabvilleState["ledgerVerification"];
+  };
   seasonSummaries?: Array<{ id: number; number: number; status: string; headline?: string; progressPercent?: number }>;
   updatedAt: string;
 }

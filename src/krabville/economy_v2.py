@@ -65,6 +65,26 @@ def ledger_is_balanced(ledger: list[dict[str, Any]]) -> bool:
     )
 
 
+def categorized_flow_totals(ledger: list[dict[str, Any]]) -> dict[str, int]:
+    """Return gross posted cents by transaction category.
+
+    Each transaction is balanced, so its positive side is the gross flow without
+    double-counting the matching credits. Unknown or malformed rows are ignored.
+    """
+
+    totals: dict[str, int] = {}
+    for transaction in ledger:
+        entries = transaction.get("entries")
+        if not isinstance(entries, list):
+            continue
+        amount = sum(max(0, _integer(entry.get("amount_cents"))) for entry in entries)
+        if not amount:
+            continue
+        category = _expense_name(transaction.get("category"))
+        totals[category] = totals.get(category, 0) + amount
+    return totals
+
+
 def _expense_name(value: Any) -> str:
     name = "_".join(str(value).casefold().split())
     return "".join(character for character in name if character.isalnum() or character == "_")[:32] or "other"
@@ -253,4 +273,38 @@ def settle_day(state: Mapping[str, Any], *, minute_of_day: int = SETTLEMENT_MINU
         "balances": balances,
         "totals": totals,
         "ledger": ledger,
+        "flow_totals_cents": categorized_flow_totals(ledger),
     }
+
+
+def settle_household_costs(
+    balances: Mapping[str, Any],
+    shared_costs: Mapping[str, Any],
+    *,
+    childcare_cents: int = 0,
+    debt: Mapping[str, Any] | None = None,
+    liquid_reserve_cents: int = 0,
+    minute_of_day: int = SETTLEMENT_MINUTE,
+) -> dict[str, Any]:
+    """Settle shared costs once against a household balance.
+
+    This deliberately stays separate from resident settlement so rent, utilities,
+    food, and care are not charged once per adult. Callers may keep using
+    ``settle_day`` unchanged and adopt this helper household by household.
+    """
+
+    result = settle_day(
+        {
+            "balances": balances,
+            "expenses": shared_costs,
+            "childcare": {
+                "active": _integer(childcare_cents) > 0,
+                "cost_per_day_cents": childcare_cents,
+            },
+            "debt": debt or {},
+            "liquid_reserve_cents": liquid_reserve_cents,
+        },
+        minute_of_day=minute_of_day,
+    )
+    result["payer"] = "household"
+    return result

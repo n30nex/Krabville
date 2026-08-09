@@ -260,6 +260,16 @@ def _run_scenario(settings) -> dict[str, str]:
         """
     ).fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0] == 0
+    jobs = {
+        str(row["kind"]): int(row["count"])
+        for row in connection.execute(
+            "SELECT kind,COUNT(*) count FROM model_jobs WHERE season_id=? GROUP BY kind",
+            (first_id,),
+        )
+    }
+    assert jobs.get("resident_intent") == DAYS_PER_SEASON
+    assert jobs.get("resident_reflection") == DAYS_PER_SEASON
+    assert sum(jobs.values()) <= 57
 
     event_types = [
         row[0]
@@ -360,6 +370,23 @@ def test_twenty_season_population_arc_reaches_24_without_care_or_housing_gaps(se
           SELECT 1 FROM household_members hm
           JOIN property_occupancy po ON po.household_id=hm.household_id AND po.ended_season_id IS NULL
           WHERE hm.resident_id=life.resident_id AND hm.ended_season_id IS NULL
+        )
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM resident_lifecycle life
+        WHERE life.alive=1 AND NOT EXISTS (
+          SELECT 1 FROM life_goals goal
+          WHERE goal.resident_id=life.resident_id AND goal.status='active'
+        )
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT resident_id FROM life_goals WHERE status='active'
+          GROUP BY resident_id HAVING COUNT(*)>1
         )
         """
     ).fetchone()[0] == 0

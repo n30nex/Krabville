@@ -30,10 +30,19 @@ def test_kvsim_v2_schema_is_complete_and_enforces_foreign_keys(settings_factory)
         "family_links": {"resident_id", "relative_resident_id", "relation_type", "biological", "legal"},
         "resident_season_state": {
             "season_id", "resident_id", "life_stage", "mood_label", "health_score",
-            "care_state", "decision_state", "current_decision_id",
+            "care_state", "decision_state", "current_decision_id", "preferred_action",
+            "preference_tags_json",
         },
         "resident_needs": {"season_id", "resident_id", "need_key", "satisfaction", "trend"},
-        "resident_wants": {"season_id", "resident_id", "kind", "status", "priority", "progress"},
+        "resident_wants": {
+            "season_id", "resident_id", "kind", "status", "priority", "progress",
+            "source_need", "action_key", "expires_tick",
+        },
+        "life_goals": {"resident_id", "description", "category", "status", "progress", "evidence_json"},
+        "housing_recovery": {
+            "season_id", "household_id", "status", "stage", "arrears_days",
+            "failed_attempts", "stable_days", "next_step",
+        },
         "facts": {"season_id", "canonical_key", "statement", "truth_value"},
         "secrets": {"fact_id", "owner_resident_id", "sensitivity", "status"},
         "resident_beliefs": {"resident_id", "fact_id", "stance", "confidence", "source_resident_id"},
@@ -53,6 +62,7 @@ def test_kvsim_v2_schema_is_complete_and_enforces_foreign_keys(settings_factory)
         "life_events": {"season_id", "tick", "event_type", "subject_resident_id", "summary"},
         "decision_history": {"season_id", "resident_id", "phase", "chosen_action", "public_thought"},
         "decision_options": {"decision_id", "option_rank", "utility_score", "selected"},
+        "decision_factors": {"decision_id", "option_rank", "factor_kind", "factor_key", "weight"},
         "story_ledger": {"season_id", "tick", "headline", "significance", "visibility"},
     }
     tables = {
@@ -89,7 +99,7 @@ def test_kvsim_v2_schema_is_complete_and_enforces_foreign_keys(settings_factory)
     assert connection.execute("SELECT COUNT(*) FROM resident_identities").fetchone()[0] == resident_count
     assert connection.execute("SELECT COUNT(*) FROM resident_lifecycle").fetchone()[0] == resident_count
     assert connection.execute(
-        "SELECT 1 FROM schema_migrations WHERE version=5"
+        "SELECT 1 FROM schema_migrations WHERE version=13"
     ).fetchone()
 
     household_id = connection.execute(

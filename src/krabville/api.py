@@ -30,6 +30,60 @@ class VoteRequest(BaseModel):
     csrfToken: str = Field(min_length=20, max_length=128)
 
 
+PUBLIC_READ_EVENT_KINDS = (
+    "goal_change",
+    "purchase",
+    "health",
+    "care_handoff",
+    "housing",
+    "relationship_change",
+    "verified_chronicle",
+)
+
+
+def _public_label(value: Any, default: str = "Not available") -> str:
+    text = str(value or "").strip().replace("_", " ").replace("-", " ")
+    return text.title() if text else default
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    """Return a table's columns without making optional migrations mandatory."""
+    if not table.replace("_", "").isalnum():
+        return set()
+    try:
+        return {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def _row_value(row: sqlite3.Row, *names: str, default: Any = None) -> Any:
+    keys = set(row.keys())
+    return next((row[name] for name in names if name in keys), default)
+
+
+def _optional_rows(
+    connection: sqlite3.Connection,
+    table: str,
+    where: str = "",
+    parameters: tuple[Any, ...] = (),
+) -> list[sqlite3.Row]:
+    if not _table_columns(connection, table):
+        return []
+    try:
+        return list(connection.execute(f"SELECT * FROM {table} {where}", parameters))
+    except sqlite3.OperationalError:
+        return []
+
+
+def _gini(values: list[int]) -> float:
+    non_negative = sorted(max(0, value) for value in values)
+    total = sum(non_negative)
+    if not non_negative or total == 0:
+        return 0.0
+    weighted = sum((index + 1) * value for index, value in enumerate(non_negative))
+    return round((2 * weighted) / (len(non_negative) * total) - (len(non_negative) + 1) / len(non_negative), 3)
+
+
 def _season(connection: sqlite3.Connection) -> sqlite3.Row | None:
     return connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
 
@@ -95,6 +149,17 @@ def _poll_payload(connection: sqlite3.Connection, season_id: int) -> dict[str, A
             "SELECT * FROM poll_options WHERE poll_id=? ORDER BY choice_id", (poll["id"],)
         )
     ]
+    total_votes = sum(int(option["votes"]) for option in options)
+    winner = next((option for option in options if option["winner"]), None)
+    poll_columns = set(poll.keys())
+    stored_source = str(poll["selection_source"]) if "selection_source" in poll_columns else "pending"
+    selection_source = None
+    if poll["status"] in {"closed", "applied"} and winner:
+        selection_source = (
+            "visitors" if stored_source == "visitor"
+            else stored_source if stored_source == "town"
+            else "visitors" if total_votes else "town"
+        )
     return {
         "id": int(poll["id"]),
         "day": int(poll["day"]),
@@ -102,7 +167,599 @@ def _poll_payload(connection: sqlite3.Connection, season_id: int) -> dict[str, A
         "opensTick": int(poll["opens_tick"]),
         "closesTick": int(poll["closes_tick"]),
         "options": options,
+        "totalVotes": total_votes,
+        "selectionSource": selection_source,
+        "winnerLabel": (
+            "Visitors selected" if selection_source == "visitors"
+            else "Town selected" if selection_source == "town"
+            else None
+        ),
     }
+
+
+def _decision_factors(connection: sqlite3.Connection, decision_id: int) -> dict[int, list[dict[str, Any]]]:
+    if not decision_id or not _table_columns(connection, "decision_factors"):
+        return {}
+    factors: dict[int, list[dict[str, Any]]] = {}
+    for row in connection.execute(
+        """
+        SELECT option_rank,factor_kind,factor_key,weight,explanation
+        FROM decision_factors WHERE decision_id=? ORDER BY option_rank,ABS(weight) DESC
+        """,
+        (decision_id,),
+    ):
+        factors.setdefault(int(row["option_rank"]), []).append({
+            "kind": str(row["factor_kind"]),
+            "key": str(row["factor_key"]),
+            "weight": round(float(row["weight"]), 2),
+            "explanation": str(row["explanation"] or ""),
+        })
+    return factors
+
+
+def _goal_evidence(
+    connection: sqlite3.Connection,
+    season_id: int,
+    resident_id: int | None = None,
+) -> list[dict[str, Any]]:
+    columns = _table_columns(connection, "goal_evidence")
+    if not columns:
+        goal_columns = _table_columns(connection, "goals")
+        if "evidence_json" not in goal_columns:
+            return []
+        resident_filter = "AND resident_id=?" if resident_id is not None else ""
+        parameters: tuple[Any, ...] = (season_id, resident_id) if resident_id is not None else (season_id,)
+        evidence_rows = []
+        for goal in connection.execute(
+            f"SELECT id,resident_id,progress,completed_tick,evidence_json FROM goals WHERE season_id=? {resident_filter} ORDER BY id",
+            parameters,
+        ):
+            evidence = loads(goal["evidence_json"], {})
+            if isinstance(evidence, dict):
+                activity_count = len(evidence.get("activityIds", []))
+                commitment_count = len(evidence.get("commitmentIds", []))
+            elif isinstance(evidence, list):
+                activity_count = sum(
+                    1 for item in evidence
+                    if isinstance(item, dict) and isinstance(item.get("activityId"), int)
+                )
+                commitment_count = sum(
+                    1 for item in evidence
+                    if isinstance(item, dict) and isinstance(item.get("commitmentId"), int)
+                )
+            else:
+                activity_count = commitment_count = 0
+            if not activity_count and not commitment_count:
+                continue
+            parts = []
+            if activity_count:
+                parts.append(f"{activity_count} recorded activit{'y' if activity_count == 1 else 'ies'}")
+            if commitment_count:
+                parts.append(f"{commitment_count} completed commitment{'s' if commitment_count != 1 else ''}")
+            evidence_rows.append({
+                "id": None,
+                "goalId": int(goal["id"]),
+                "tick": int(goal["completed_tick"] or 0),
+                "kind": "goal_evidence",
+                "summary": " and ".join(parts).capitalize(),
+                "progressDelta": int(goal["progress"] or 0),
+                "ledgerId": None,
+                "verified": True,
+            })
+        return evidence_rows
+    where = []
+    parameters: list[Any] = []
+    if "season_id" in columns:
+        where.append("season_id=?")
+        parameters.append(season_id)
+    if resident_id is not None and "resident_id" in columns:
+        where.append("resident_id=?")
+        parameters.append(resident_id)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    order = " ORDER BY tick DESC,id DESC" if {"tick", "id"}.issubset(columns) else ""
+    try:
+        rows = list(connection.execute(f"SELECT * FROM goal_evidence {clause}{order} LIMIT 120", tuple(parameters)))
+    except sqlite3.OperationalError:
+        return []
+    if resident_id is not None and "resident_id" not in columns and "goal_id" in columns:
+        goal_ids = {
+            int(row[0])
+            for row in connection.execute(
+                "SELECT id FROM goals WHERE season_id=? AND resident_id=?", (season_id, resident_id)
+            )
+        }
+        rows = [row for row in rows if int(_row_value(row, "goal_id", default=-1)) in goal_ids]
+    return [
+        {
+            "id": _row_value(row, "id"),
+            "goalId": _row_value(row, "goal_id", "goalId"),
+            "tick": int(_row_value(row, "tick", "created_tick", default=0) or 0),
+            "kind": str(_row_value(row, "evidence_type", "kind", default="activity")),
+            "summary": str(_row_value(row, "summary", "description", "evidence", default="Goal progress recorded")),
+            "progressDelta": int(_row_value(row, "progress_delta", "delta", default=0) or 0),
+            "ledgerId": _row_value(row, "ledger_id"),
+            "verified": bool(_row_value(row, "verified", default=True)),
+        }
+        for row in rows
+    ]
+
+
+def _life_goals(connection: sqlite3.Connection, resident_id: int | None = None) -> list[dict[str, Any]]:
+    columns = _table_columns(connection, "life_goals")
+    if not columns or "resident_id" not in columns:
+        return []
+    resident_filter = "WHERE lg.resident_id=?" if resident_id is not None else ""
+    ordering = "CASE lg.status WHEN 'active' THEN 0 ELSE 1 END,lg.id DESC" if "status" in columns else "lg.id DESC"
+    parameters: tuple[Any, ...] = (resident_id,) if resident_id is not None else ()
+    try:
+        rows = list(connection.execute(
+            f"""
+            SELECT lg.*,r.slug resident_slug,r.name resident_name
+            FROM life_goals lg JOIN residents r ON r.id=lg.resident_id
+            {resident_filter}
+            ORDER BY {ordering} LIMIT 72
+            """,
+            parameters,
+        ))
+    except sqlite3.OperationalError:
+        return []
+
+    evidence_by_goal: dict[int, list[dict[str, Any]]] = {}
+    activity_ids: set[int] = set()
+    raw_evidence: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        goal_id = int(row["id"])
+        value = loads(_row_value(row, "evidence_json", default="[]"), [])
+        if isinstance(value, dict):
+            value = [
+                {"activityId": activity_id}
+                for activity_id in value.get("activityIds", [])
+            ]
+        entries = [item for item in value if isinstance(item, dict)][-16:] if isinstance(value, list) else []
+        raw_evidence[goal_id] = entries
+        for item in entries:
+            try:
+                activity_ids.add(int(item["activityId"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+
+    activities: dict[int, sqlite3.Row] = {}
+    if activity_ids and _table_columns(connection, "activities"):
+        ordered_ids = sorted(activity_ids)
+        for start in range(0, len(ordered_ids), 500):
+            batch = ordered_ids[start:start + 500]
+            placeholders = ",".join("?" for _ in batch)
+            try:
+                activities.update({
+                    int(item["id"]): item
+                    for item in connection.execute(
+                        f"SELECT id,resident_id,tick,kind,summary FROM activities WHERE id IN ({placeholders})",
+                        tuple(batch),
+                    )
+                })
+            except sqlite3.OperationalError:
+                activities = {}
+                break
+
+    for row in rows:
+        goal_id = int(row["id"])
+        resident = int(row["resident_id"])
+        evidence: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_evidence[goal_id]):
+            try:
+                activity_id = int(item.get("activityId"))
+            except (TypeError, ValueError):
+                activity_id = 0
+            activity = activities.get(activity_id)
+            verified = bool(activity and int(activity["resident_id"] or 0) == resident)
+            action = str(item.get("action") or (activity["kind"] if activity else "life progress"))
+            evidence.append({
+                "id": f"life-{goal_id}-{index + 1}",
+                "goalId": goal_id,
+                "goalScope": "life",
+                "tick": int(activity["tick"] if verified else item.get("tick") or 0),
+                "kind": "life_goal_activity",
+                "summary": str(activity["summary"]) if verified else f"{_public_label(action)} advanced this life goal",
+                "progressDelta": int(item.get("progressDelta") or 2),
+                "ledgerId": None,
+                "verified": verified,
+            })
+        evidence_by_goal[goal_id] = evidence
+
+    return [
+        {
+            "id": int(row["id"]),
+            "resident": str(row["resident_slug"]),
+            "residentName": str(row["resident_name"]),
+            "scope": "life",
+            "category": str(_row_value(row, "category", default="life")),
+            "description": str(_row_value(row, "description", default="Build a meaningful life in Krabville.")),
+            "status": str(_row_value(row, "status", default="active")),
+            "progress": int(_row_value(row, "progress", default=0) or 0),
+            "createdSeasonId": _row_value(row, "created_season_id"),
+            "createdTick": int(_row_value(row, "created_tick", default=0) or 0),
+            "completedSeasonId": _row_value(row, "completed_season_id"),
+            "completedTick": _row_value(row, "completed_tick"),
+            "evidence": evidence_by_goal[int(row["id"])],
+            "evidenceCount": len(evidence_by_goal[int(row["id"])]),
+        }
+        for row in rows
+    ]
+
+
+def _care_schedules(connection: sqlite3.Connection, resident_id: int | None = None) -> list[dict[str, Any]]:
+    if not _table_columns(connection, "childcare_arrangements"):
+        return []
+    schedule_exists = bool(_table_columns(connection, "childcare_schedule"))
+    schedule_select = (
+        "s.day_of_week,s.start_minute,s.end_minute" if schedule_exists
+        else "NULL day_of_week,NULL start_minute,NULL end_minute"
+    )
+    schedule_join = "LEFT JOIN childcare_schedule s ON s.arrangement_id=c.id" if schedule_exists else ""
+    resident_filter = "AND c.child_resident_id=?" if resident_id is not None else ""
+    parameters: tuple[Any, ...] = (resident_id,) if resident_id is not None else ()
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT c.id,c.child_resident_id,c.arrangement_type,c.status,c.cost_per_day_cents,
+              child.slug child_slug,child.name child_name,carer.slug caregiver_slug,
+              carer.name caregiver_name,provider.name provider_name,{schedule_select}
+            FROM childcare_arrangements c
+            JOIN residents child ON child.id=c.child_resident_id
+            LEFT JOIN residents carer ON carer.id=c.caregiver_resident_id
+            LEFT JOIN businesses provider ON provider.id=c.provider_business_id
+            {schedule_join}
+            WHERE c.status IN ('planned','active') {resident_filter}
+            ORDER BY c.child_resident_id,c.id,day_of_week,start_minute
+            """,
+            parameters,
+        )
+    except sqlite3.OperationalError:
+        return []
+    return [
+        {
+            "arrangementId": int(row["id"]),
+            "resident": str(row["child_slug"]),
+            "residentName": str(row["child_name"]),
+            "type": str(row["arrangement_type"]),
+            "typeLabel": _public_label(row["arrangement_type"]),
+            "status": str(row["status"]),
+            "statusLabel": _public_label(row["status"]),
+            "caregiver": row["caregiver_name"] or row["provider_name"],
+            "caregiverSlug": row["caregiver_slug"],
+            "day": int(row["day_of_week"]) if row["day_of_week"] is not None else None,
+            "startMinute": int(row["start_minute"]) if row["start_minute"] is not None else None,
+            "endMinute": int(row["end_minute"]) if row["end_minute"] is not None else None,
+            "costPerDay": int(row["cost_per_day_cents"] or 0) / 100,
+            "scheduleLabel": (
+                f"Day {int(row['day_of_week']) + 1}, {int(row['start_minute'] or 0) // 60:02d}:"
+                f"{int(row['start_minute'] or 0) % 60:02d}-{int(row['end_minute'] or 0) // 60:02d}:"
+                f"{int(row['end_minute'] or 0) % 60:02d}"
+                if row["day_of_week"] is not None else "Schedule pending"
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _health_details(connection: sqlite3.Connection, resident_id: int | None = None) -> list[dict[str, Any]]:
+    if not _table_columns(connection, "health_conditions"):
+        return []
+    resident_filter = "AND h.resident_id=?" if resident_id is not None else ""
+    parameters: tuple[Any, ...] = (resident_id,) if resident_id is not None else ()
+    try:
+        rows = connection.execute(
+            f"""
+            SELECT h.*,r.slug resident_slug,r.name resident_name,b.name provider_name
+            FROM health_conditions h JOIN residents r ON r.id=h.resident_id
+            LEFT JOIN businesses b ON b.id=h.provider_business_id
+            WHERE h.status IN ('latent','active','recovering','terminal') {resident_filter}
+            ORDER BY h.severity DESC,h.id
+            """,
+            parameters,
+        )
+    except sqlite3.OperationalError:
+        return []
+    conditions = []
+    for row in rows:
+        severity = int(row["severity"])
+        severity_label = "Mild" if severity < 25 else "Moderate" if severity < 60 else "Serious" if severity < 85 else "Critical"
+        conditions.append({
+            "id": int(row["id"]),
+            "resident": str(row["resident_slug"]),
+            "residentName": str(row["resident_name"]),
+            "key": str(row["condition_key"]),
+            "name": str(row["name"]),
+            "type": str(row["condition_type"]),
+            "typeLabel": _public_label(row["condition_type"]),
+            "severity": severity,
+            "severityLabel": severity_label,
+            "status": str(row["status"]),
+            "statusLabel": _public_label(row["status"]),
+            "contagious": bool(row["contagious"]),
+            "contagionLabel": "Contagious" if row["contagious"] else "Not contagious",
+            "provider": row["provider_name"],
+            "treatmentCost": int(row["treatment_cost_cents"] or 0) / 100,
+        })
+    return conditions
+
+
+def _housing_recovery(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
+    shelter_rows: list[sqlite3.Row] = []
+    if _table_columns(connection, "property_occupancy"):
+        try:
+            shelter_rows = list(connection.execute(
+                """
+                SELECT DISTINCT h.id household_id,h.name household_name,p.name property_name,
+                  r.slug resident_slug,r.name resident_name
+                FROM property_occupancy o JOIN properties p ON p.id=o.property_id
+                JOIN households h ON h.id=o.household_id
+                JOIN household_members hm ON hm.household_id=h.id AND hm.ended_season_id IS NULL
+                JOIN residents r ON r.id=hm.resident_id
+                JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+                WHERE o.ended_season_id IS NULL AND p.property_type='shelter'
+                ORDER BY h.id,r.id
+                """
+            ))
+        except sqlite3.OperationalError:
+            shelter_rows = []
+    recovery_table = next(
+        (name for name in ("housing_recovery", "housing_recovery_plans") if _table_columns(connection, name)),
+        None,
+    )
+    plans: list[dict[str, Any]] = []
+    if recovery_table:
+        columns = _table_columns(connection, recovery_table)
+        where = "WHERE season_id=?" if "season_id" in columns else ""
+        parameters: tuple[Any, ...] = (season_id,) if where else ()
+        for row in _optional_rows(connection, recovery_table, where, parameters):
+            status = str(_row_value(row, "status", default="planned"))
+            stage = str(_row_value(row, "stage", "recovery_stage", default="assessment"))
+            stable_days = int(_row_value(row, "stable_days", default=0) or 0)
+            plans.append({
+                "id": _row_value(row, "id"),
+                "householdId": _row_value(row, "household_id"),
+                "residentId": _row_value(row, "resident_id"),
+                "status": status,
+                "statusLabel": _public_label(status),
+                "stage": stage,
+                "stageLabel": _public_label(stage),
+                "arrearsDays": int(_row_value(row, "arrears_days", default=0) or 0),
+                "failedAttempts": int(_row_value(row, "failed_attempts", default=0) or 0),
+                "stableDays": stable_days,
+                "stabilityLabel": f"{stable_days} stable day{'s' if stable_days != 1 else ''}",
+                "nextStep": str(_row_value(row, "next_step", "summary", default="Housing review pending")),
+            })
+    return {
+        "available": recovery_table is not None,
+        "trackingLabel": "Recovery tracking active" if recovery_table else "Recovery tracking unavailable",
+        "shelterResidents": len(shelter_rows),
+        "shelterHouseholds": len({int(row["household_id"]) for row in shelter_rows}),
+        "residents": [
+            {"slug": row["resident_slug"], "name": row["resident_name"], "household": row["household_name"], "shelter": row["property_name"]}
+            for row in shelter_rows
+        ],
+        "plans": plans,
+    }
+
+
+def _model_circuits(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
+    table = next(
+        (name for name in ("model_circuits", "model_circuit_state") if _table_columns(connection, name)),
+        None,
+    )
+    if not table:
+        return {"available": False, "summaryLabel": "Circuit telemetry unavailable", "circuits": []}
+    columns = _table_columns(connection, table)
+    where = "WHERE season_id=?" if "season_id" in columns else ""
+    parameters: tuple[Any, ...] = (season_id,) if where else ()
+    circuits = []
+    for row in _optional_rows(connection, table, where, parameters):
+        status = str(_row_value(row, "status", "state", default="closed"))
+        circuits.append({
+            "jobKind": str(_row_value(row, "job_kind", "kind", default="unknown")),
+            "jobLabel": _public_label(_row_value(row, "job_kind", "kind", default="model job")),
+            "model": _row_value(row, "model"),
+            "status": status,
+            "statusLabel": {
+                "closed": "Primary route healthy",
+                "open": "Fallback route active",
+                "half_open": "Primary route probe due",
+                "probing": "Testing primary route",
+            }.get(status, _public_label(status)),
+            "consecutiveFailures": int(_row_value(row, "consecutive_failures", "failures", default=0) or 0),
+            "day": _row_value(row, "day"),
+            "openedDay": _row_value(row, "opened_day", "day"),
+            "openedAt": _row_value(row, "opened_at"),
+            "probeDay": _row_value(row, "probe_day", "next_probe_day"),
+            "fallbackModel": _row_value(row, "fallback_model"),
+            "updatedAt": _row_value(row, "updated_at"),
+        })
+    active = sum(item["status"] != "closed" for item in circuits)
+    return {
+        "available": True,
+        "summaryLabel": f"Fallback active for {active} job type{'s' if active != 1 else ''}" if active else "Primary routes healthy",
+        "circuits": circuits,
+    }
+
+
+def _story_ledger(connection: sqlite3.Connection, season_id: int, limit: int = 120) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    columns = _table_columns(connection, "story_ledger")
+    if not columns:
+        empty = {"available": False, "verified": 0, "unverified": 0, "legacy": 0, "participantLinks": 0}
+        return [], empty
+    participant_map: dict[int, list[dict[str, str]]] = {}
+    if _table_columns(connection, "story_ledger_participants"):
+        try:
+            for row in connection.execute(
+                """
+                SELECT p.ledger_id,r.slug,r.name,p.role FROM story_ledger_participants p
+                JOIN residents r ON r.id=p.resident_id JOIN story_ledger l ON l.id=p.ledger_id
+                WHERE l.season_id=? ORDER BY p.ledger_id,r.id
+                """,
+                (season_id,),
+            ):
+                participant_map.setdefault(int(row["ledger_id"]), []).append({
+                    "slug": str(row["slug"]), "name": str(row["name"]), "role": str(row["role"])
+                })
+        except sqlite3.OperationalError:
+            participant_map = {}
+    verified_ledger_ids: set[int] = set()
+    chronicle_columns = _table_columns(connection, "daily_chronicles")
+    if {"verified", "ledger_ids_json"}.issubset(chronicle_columns):
+        for chronicle in connection.execute(
+            "SELECT verified,ledger_ids_json FROM daily_chronicles WHERE season_id=?", (season_id,)
+        ):
+            if chronicle["verified"]:
+                verified_ledger_ids.update(int(value) for value in loads(chronicle["ledger_ids_json"], []) if str(value).isdigit())
+    rows = connection.execute(
+        "SELECT * FROM story_ledger WHERE season_id=? ORDER BY tick DESC,id DESC LIMIT ?",
+        (season_id, limit),
+    )
+    verification_available = (
+        "verification_status" in columns
+        or "verified" in columns
+        or {"verified", "ledger_ids_json"}.issubset(chronicle_columns)
+    )
+    ledger: list[dict[str, Any]] = []
+    for row in rows:
+        raw_status = _row_value(row, "verification_status")
+        raw_verified = _row_value(row, "verified")
+        status = str(raw_status) if raw_status is not None else (
+            "verified" if raw_verified or int(row["id"]) in verified_ledger_ids
+            else "unverified" if raw_verified is not None or verification_available
+            else "legacy"
+        )
+        day = int(row["day"])
+        phase = str(_row_value(row, "phase", default="epilogue" if day >= 7 else "day"))
+        participants = participant_map.get(int(row["id"]), [])
+        ledger.append({
+            "id": row["id"], "tick": int(row["tick"]), "day": day,
+            "category": row["entry_type"], "title": row["headline"], "summary": row["summary"],
+            "participants": [item["slug"] for item in participants],
+            "participantDetails": participants,
+            "phase": phase,
+            "epilogue": phase == "epilogue" or day >= 7,
+            "verificationStatus": status,
+            "verified": status == "verified" if verification_available else None,
+        })
+    summary = {
+        "available": verification_available,
+        "verified": sum(item["verificationStatus"] == "verified" for item in ledger),
+        "unverified": sum(item["verificationStatus"] == "unverified" for item in ledger),
+        "legacy": sum(item["verificationStatus"] == "legacy" for item in ledger),
+        "participantLinks": sum(len(item["participants"]) for item in ledger),
+    }
+    return ledger, summary
+
+
+def _economy_v22(
+    connection: sqlite3.Connection,
+    season_id: int,
+    resident_net_worth: list[int],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    daily: dict[int, dict[str, float | list[int]]] = {}
+
+    def bucket(day: int) -> dict[str, float | list[int]]:
+        return daily.setdefault(day, {
+            "residentIncome": 0.0, "residentSpending": 0.0,
+            "retailVolume": 0.0, "businessRevenue": 0.0,
+            "businessExpenses": 0.0, "residentWealth": [],
+        })
+
+    try:
+        for row in connection.execute(
+            """
+            SELECT t.tick,t.category,a.resident_id,a.business_id,e.amount_cents
+            FROM financial_transactions t JOIN transaction_entries e ON e.transaction_id=t.id
+            JOIN financial_accounts a ON a.id=e.account_id
+            WHERE t.season_id=? AND t.status='posted'
+            """,
+            (season_id,),
+        ):
+            values = bucket(int(row["tick"]) // 288)
+            amount = int(row["amount_cents"])
+            if row["resident_id"] is not None:
+                key = "residentIncome" if amount > 0 else "residentSpending"
+                values[key] = float(values[key]) + abs(amount) / 100
+            if row["business_id"] is not None:
+                key = "businessRevenue" if amount > 0 else "businessExpenses"
+                values[key] = float(values[key]) + abs(amount) / 100
+            if row["category"] == "retail_purchase":
+                values["retailVolume"] = float(values["retailVolume"]) + abs(amount) / 200
+    except sqlite3.OperationalError:
+        pass
+    try:
+        for row in connection.execute(
+            """
+            SELECT day,net_worth_cents FROM financial_snapshots
+            WHERE season_id=? AND owner_kind='resident' ORDER BY day,owner_id
+            """,
+            (season_id,),
+        ):
+            wealth = bucket(int(row["day"]))["residentWealth"]
+            if isinstance(wealth, list):
+                wealth.append(int(row["net_worth_cents"]))
+    except sqlite3.OperationalError:
+        pass
+    prices: dict[int, float] = {}
+    try:
+        prices = {
+            int(row["day"]): float(row["average_price"] or 0) / 100
+            for row in connection.execute(
+                """
+                SELECT day,AVG(average_price_cents) average_price FROM price_history
+                WHERE season_id=? AND units_sold>0 GROUP BY day ORDER BY day
+                """,
+                (season_id,),
+            )
+        }
+    except sqlite3.OperationalError:
+        pass
+    baseline_price = next((value for _, value in sorted(prices.items()) if value > 0), 0.0)
+    history = []
+    for day in sorted(set(daily) | set(prices)):
+        values = bucket(day)
+        wealth = sorted(values["residentWealth"]) if isinstance(values["residentWealth"], list) else []
+        median = wealth[len(wealth) // 2] / 100 if wealth else None
+        price = prices.get(day)
+        history.append({
+            "day": day,
+            "residentMedianWealth": median,
+            "disposableIncome": float(values["residentIncome"]) - float(values["residentSpending"]),
+            "cpi": round(100 * price / baseline_price, 2) if price and baseline_price else None,
+            "retailVolume": round(float(values["retailVolume"]), 2),
+            "businessRevenue": round(float(values["businessRevenue"]), 2),
+            "businessProfit": round(float(values["businessRevenue"]) - float(values["businessExpenses"]), 2),
+        })
+    total_income = sum(float(values["residentIncome"]) for values in daily.values())
+    total_spending = sum(float(values["residentSpending"]) for values in daily.values())
+    business_revenue = sum(float(values["businessRevenue"]) for values in daily.values())
+    business_expenses = sum(float(values["businessExpenses"]) for values in daily.values())
+    retail_volume = sum(float(values["retailVolume"]) for values in daily.values())
+    eligible = int(connection.execute(
+        "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1 AND current_stage IN ('teen','adult','senior')"
+    ).fetchone()[0])
+    employed = int(connection.execute("SELECT COUNT(DISTINCT resident_id) FROM employment WHERE status='active'").fetchone()[0])
+    debt = connection.execute(
+        """
+        SELECT COUNT(*) total,SUM(CASE WHEN status IN ('late','defaulted') THEN 1 ELSE 0 END) delinquent
+        FROM debts WHERE status IN ('current','late','defaulted')
+        """
+    ).fetchone()
+    current_cpi = next((item["cpi"] for item in reversed(history) if item["cpi"] is not None), None)
+    return {
+        "residentMedianWealth": (sorted(resident_net_worth)[len(resident_net_worth) // 2] / 100 if resident_net_worth else 0),
+        "disposableIncome": round((total_income - total_spending) / max(1, eligible), 2),
+        "cpi": current_cpi,
+        "retailVolume": round(retail_volume, 2),
+        "businessRevenue": round(business_revenue, 2),
+        "businessProfit": round(business_revenue - business_expenses, 2),
+        "employmentRate": round(100 * employed / max(1, eligible), 1),
+        "debtDelinquencyRate": round(100 * int(debt["delinquent"] or 0) / max(1, int(debt["total"] or 0)), 1),
+        "delinquentDebts": int(debt["delinquent"] or 0),
+        "wealthGini": _gini(resident_net_worth),
+    }, history
 
 
 def _resident_live_v2(
@@ -128,13 +785,22 @@ def _resident_live_v2(
         )
     ]
     decision_id = int(row["current_decision_id"] or 0)
+    factors = _decision_factors(connection, decision_id)
     candidates = [
         {
             "activity": item["action"],
             "destination": item["destination"],
             "score": round(float(item["utility_score"]), 1),
             "confidence": "chosen" if item["selected"] else f"option {item['option_rank']}",
-            "reason": "Need, schedule, weather, relationships, and current goals",
+            "reason": next(
+                (factor["explanation"] for factor in factors.get(int(item["option_rank"]), []) if factor["explanation"]),
+                "Need, schedule, weather, relationships, and current goals",
+            ),
+            "drivers": [
+                factor["key"].replace("_", " ").title()
+                for factor in factors.get(int(item["option_rank"]), [])[:4]
+            ],
+            "factors": factors.get(int(item["option_rank"]), []),
         }
         for item in connection.execute(
             """
@@ -168,6 +834,13 @@ def _resident_live_v2(
         "wants": [item for item in wants if item["title"] != "Aspiration"],
         "aspirations": [item for item in wants if item["title"] == "Aspiration"],
         "decisionCandidates": candidates,
+        "decisionFactors": factors.get(
+            next((int(item["option_rank"]) for item in connection.execute(
+                "SELECT option_rank FROM decision_options WHERE decision_id=? AND selected=1 LIMIT 1",
+                (decision_id,),
+            )), 0),
+            [],
+        ) if decision_id else [],
         "pondering": {
             "active": row["decision_state"] == "pondering",
             "thought": row["public_thought"],
@@ -280,13 +953,8 @@ def _resident_detail_v2(
             (resident_id,),
         )
     ]
-    conditions = [
-        str(item["name"])
-        for item in connection.execute(
-            "SELECT name FROM health_conditions WHERE resident_id=? AND status IN ('latent','active','recovering') ORDER BY severity DESC",
-            (resident_id,),
-        )
-    ]
+    condition_details = _health_details(connection, resident_id)
+    conditions = [str(item["name"]) for item in condition_details]
     care = list(connection.execute(
         """
         SELECT c.arrangement_type,c.cost_per_day_cents,r.name caregiver_name,b.name provider_name
@@ -415,6 +1083,20 @@ def _resident_detail_v2(
         "SELECT household_id FROM household_members WHERE resident_id=? AND ended_season_id IS NULL",
         (resident_id,),
     ).fetchone()
+    care_schedules = _care_schedules(connection, resident_id)
+    goal_evidence = _goal_evidence(connection, season_id, resident_id)
+    town_housing = _housing_recovery(connection, season_id)
+    household_id = int(household[0]) if household else None
+    housing_plans = [
+        plan for plan in town_housing["plans"]
+        if plan["residentId"] == resident_id or (household_id is not None and plan["householdId"] == household_id)
+    ]
+    shelter_record = next(
+        (item for item in town_housing["residents"] if item["slug"] == connection.execute(
+            "SELECT slug FROM residents WHERE id=?", (resident_id,)
+        ).fetchone()[0]),
+        None,
+    )
     home_inventory = [
         {
             "name": item["name"], "category": item["category"],
@@ -473,18 +1155,28 @@ def _resident_detail_v2(
         )
     ]
     liquid = sum(balances.get(name, 0) for name in ("cash", "chequing", "savings"))
+    care_status = (
+        "Care covered" if current_care and current_care["care_state"] in {"covered", "institutional"}
+        else "Care gap" if current_care and current_care["care_state"] == "uncovered"
+        else "Care plan active" if care else "Independent"
+    )
+    health_status = (
+        "Treatment needed" if any(item["status"] in {"active", "terminal"} for item in condition_details)
+        else "Recovering" if any(item["status"] == "recovering" for item in condition_details)
+        else "Monitoring" if condition_details
+        else "No active condition"
+    )
     return {
         "family": family,
         "secrets": secrets,
         "beliefs": beliefs,
         "health": {
-            "status": (
-                "Care covered" if current_care and current_care["care_state"] in {"covered", "institutional"}
-                else "Care gap" if current_care and current_care["care_state"] == "uncovered"
-                else "Needs care" if care else "Independent"
-            ),
+            "status": health_status,
+            "careStatus": care_status,
             "conditions": conditions,
+            "conditionDetails": condition_details,
             "care": [str(item["arrangement_type"]) for item in care],
+            "careSchedules": care_schedules,
             "caregiver": (
                 str(current_care["caregiver_name"] or current_care["provider_name"])
                 if current_care and (current_care["caregiver_name"] or current_care["provider_name"])
@@ -518,20 +1210,26 @@ def _resident_detail_v2(
         "transactions": transactions,
         "properties": properties,
         "lifeLedger": life_ledger,
+        "goalEvidence": goal_evidence,
+        "lifeGoals": _life_goals(connection, resident_id),
+        "housingRecovery": {
+            "available": town_housing["available"],
+            "trackingLabel": town_housing["trackingLabel"],
+            "inShelter": shelter_record is not None,
+            "shelter": shelter_record["shelter"] if shelter_record else None,
+            "stateLabel": "Temporary shelter" if shelter_record else "Housed",
+            "recoveryLabel": (
+                housing_plans[0]["stageLabel"] if housing_plans
+                else "No active recovery plan" if town_housing["available"]
+                else "Recovery data unavailable"
+            ),
+            "plans": housing_plans,
+        },
     }
 
 
 def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
-    ledger = [
-        {
-            "id": row["id"], "tick": int(row["tick"]), "day": int(row["day"]),
-            "category": row["entry_type"], "title": row["headline"], "summary": row["summary"],
-        }
-        for row in connection.execute(
-            "SELECT id,tick,day,entry_type,headline,summary FROM story_ledger WHERE season_id=? ORDER BY tick DESC,id DESC LIMIT 120",
-            (season_id,),
-        )
-    ]
+    ledger, ledger_verification = _story_ledger(connection, season_id)
     households = []
     families = []
     for household in connection.execute("SELECT * FROM households WHERE status='active' ORDER BY id"):
@@ -872,6 +1570,13 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         """,
         (season_id,),
     ).fetchone()[0])
+    economy_indicators, economy_metric_history = _economy_v22(
+        connection, season_id, resident_net_worth
+    )
+    housing_recovery = _housing_recovery(connection, season_id)
+    economy_indicators["shelterOccupancy"] = housing_recovery["shelterResidents"]
+    health_conditions = _health_details(connection)
+    care_schedules = _care_schedules(connection)
     season_number = int(connection.execute("SELECT number FROM seasons WHERE id=?", (season_id,)).fetchone()[0])
     stage_counts = {
         str(row["current_stage"]): int(row["residents"])
@@ -941,6 +1646,13 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         },
         "ledger": ledger,
         "townEvents": ledger,
+        "ledgerVerification": ledger_verification,
+        "epilogues": [entry for entry in ledger if entry["epilogue"]],
+        "goalEvidence": _goal_evidence(connection, season_id),
+        "careSchedules": care_schedules,
+        "healthConditions": health_conditions,
+        "housingRecovery": housing_recovery,
+        "modelCircuits": _model_circuits(connection, season_id),
         "households": households,
         "families": families,
         "properties": property_rows,
@@ -979,6 +1691,16 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
                 "apartmentCapacity": int(housing["apartment_capacity"] or 0),
                 "sharedBuildings": shared_buildings,
             },
+            "economy": economy_indicators,
+            "care": {
+                "scheduledBlocks": len(care_schedules),
+                "dependents": len({item["resident"] for item in care_schedules}),
+            },
+            "health": {
+                "activeConditions": len(health_conditions),
+                "recovering": sum(item["status"] == "recovering" for item in health_conditions),
+                "contagious": sum(item["contagious"] for item in health_conditions),
+            },
         },
         "economy": {
             "currency": "CAD", "totalCash": total_cash_cents / 100,
@@ -999,6 +1721,8 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "businessRevenue": sum(float(business["sales"] or 0) for business in business_rows),
             "serviceRevenue": service_revenue / 100,
             "goodsSold": goods_sold,
+            "indicators": economy_indicators,
+            "metricHistory": economy_metric_history,
         },
         "seasonSummaries": [
             {
@@ -1038,11 +1762,23 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
                 "models": {},
             },
             "events": [],
+            "eventKinds": list(PUBLIC_READ_EVENT_KINDS),
             "conversations": [],
             "goals": [],
+            "lifeGoals": [],
             "props": [],
             "chronicles": [],
             "report": None,
+            "ledger": [],
+            "townEvents": [],
+            "ledgerVerification": {"available": False, "verified": 0, "unverified": 0, "legacy": 0, "participantLinks": 0},
+            "epilogues": [],
+            "goalEvidence": [],
+            "careSchedules": [],
+            "healthConditions": [],
+            "housingRecovery": {"available": False, "trackingLabel": "Recovery tracking unavailable", "shelterResidents": 0, "shelterHouseholds": 0, "residents": [], "plans": []},
+            "modelCircuits": {"available": False, "summaryLabel": "Circuit telemetry unavailable", "circuits": []},
+            "docket": {"source": "authoritative-ledger", "entries": [], "activeGoals": [], "lifeGoals": [], "epilogues": []},
             "world": {
                 "width": 4608,
                 "height": 3072,
@@ -1126,14 +1862,23 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
             (season_id,),
         )
     ][::-1]
+    goal_evidence = _goal_evidence(connection, season_id)
+    life_goals = _life_goals(connection)
+    evidence_by_goal: dict[int, list[dict[str, Any]]] = {}
+    for item in goal_evidence:
+        if item["goalId"] is not None:
+            evidence_by_goal.setdefault(int(item["goalId"]), []).append(item)
     goals = [
         {
+            "id": int(row["id"]),
             "resident": row["slug"],
             "residentName": row["name"],
             "scope": row["scope"],
             "description": row["description"],
             "status": row["status"],
             "progress": int(row["progress"]),
+            "evidence": evidence_by_goal.get(int(row["id"]), []),
+            "evidenceCount": len(evidence_by_goal.get(int(row["id"]), [])),
         }
         for row in connection.execute(
             """
@@ -1155,16 +1900,28 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
             (season_id,),
         )
     ]
-    chronicles = [
-        {"day": int(row["day"]), "title": row["title"], "narrative": row["narrative"]}
-        for row in connection.execute(
-            "SELECT day,title,narrative FROM daily_chronicles WHERE season_id=? ORDER BY day",
-            (season_id,),
-        )
-    ]
+    chronicle_columns = _table_columns(connection, "daily_chronicles")
+    chronicles = []
+    for row in connection.execute(
+        "SELECT * FROM daily_chronicles WHERE season_id=? ORDER BY day", (season_id,)
+    ):
+        status = _row_value(row, "verification_status")
+        verified = _row_value(row, "verified")
+        chronicles.append({
+            "day": int(row["day"]), "title": row["title"], "narrative": row["narrative"],
+            "source": str(_row_value(row, "source", default="legacy_model")),
+            "ledgerIds": loads(_row_value(row, "ledger_ids_json", default="[]"), []),
+            "verificationStatus": str(status) if status is not None else (
+                "verified" if verified else "unverified" if verified is not None else "legacy"
+            ),
+            "verified": bool(verified) if "verified" in chronicle_columns else None,
+        })
+    town = _town_v2(connection, season_id)
+    docket_entries = [entry for entry in town["ledger"] if not entry["epilogue"]][:16]
     complete = season["status"] == "complete"
     return {
         "schemaVersion": 3,
+        "release": {"version": __version__, "commit": settings.release_commit},
         "ok": True,
         "season": {
             "id": season_id,
@@ -1209,10 +1966,20 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
         "poll": _poll_payload(connection, season_id),
         "usage": _usage(connection, season_id, settings),
         "events": recent,
+        "eventKinds": list(PUBLIC_READ_EVENT_KINDS),
         "conversations": conversations,
         "goals": goals,
+        "lifeGoals": life_goals,
         "props": props,
         "chronicles": chronicles,
+        "docket": {
+            "source": "authoritative-ledger",
+            "entries": docket_entries,
+            "activeGoals": [goal for goal in goals if goal["status"] in {"active", "pursuing"}],
+            "lifeGoals": [goal for goal in life_goals if goal["status"] == "active"],
+            "epilogues": town["epilogues"],
+            "verification": town["ledgerVerification"],
+        },
         "report": (
             {
                 "headline": report["headline"],
@@ -1222,7 +1989,7 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
             }
             if report else None
         ),
-        **_town_v2(connection, season_id),
+        **town,
         "updatedAt": now_iso(),
     }
 
@@ -1290,6 +2057,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             return {
                 "ok": quick == "ok",
+                "release": {"version": __version__, "commit": settings.release_commit},
                 "database": quick,
                 "seasonStatus": season["status"] if season else "draft",
                 "season": season_payload,
@@ -1347,7 +2115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             season = _season(connection)
             if not season:
-                return {"events": [], "next": after}
+                return {"events": [], "next": after, "eventKinds": list(PUBLIC_READ_EVENT_KINDS)}
             rows = list(
                 connection.execute(
                     "SELECT * FROM event_stream WHERE season_id=? AND seq>? ORDER BY seq LIMIT ?",
@@ -1355,7 +2123,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
             items = [{"seq": int(row["seq"]), "tick": int(row["tick"]), "type": row["event_type"], "payload": loads(row["payload_json"], {}), "createdAt": row["created_at"]} for row in rows]
-            return {"events": items, "next": items[-1]["seq"] if items else after}
+            return {
+                "events": items,
+                "next": items[-1]["seq"] if items else after,
+                "eventKinds": list(PUBLIC_READ_EVENT_KINDS),
+            }
         finally:
             connection.close()
 
@@ -1544,7 +2316,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             base = _resident_base_v2(
                 connection, int(season["id"]), resident_row, indoor_locations
             )
-            goals = [dict(item) for item in connection.execute("SELECT scope,description,status,progress FROM goals WHERE season_id=? AND resident_id=? ORDER BY id DESC LIMIT 12", (season["id"], resident_id))]
+            resident_evidence = _goal_evidence(connection, int(season["id"]), resident_id)
+            evidence_by_goal: dict[int, list[dict[str, Any]]] = {}
+            for item in resident_evidence:
+                if item["goalId"] is not None:
+                    evidence_by_goal.setdefault(int(item["goalId"]), []).append(item)
+            goals = []
+            for item in connection.execute(
+                "SELECT id,scope,description,status,progress FROM goals WHERE season_id=? AND resident_id=? ORDER BY id DESC LIMIT 12",
+                (season["id"], resident_id),
+            ):
+                goal = dict(item)
+                goal["evidence"] = evidence_by_goal.get(int(item["id"]), [])
+                goal["evidenceCount"] = len(goal["evidence"])
+                goals.append(goal)
             memories = [dict(item) for item in connection.execute("SELECT kind,content,tags,valence,salience,location,created_tick FROM memories WHERE season_id=? AND resident_id=? ORDER BY created_tick DESC,id DESC LIMIT 20", (season["id"], resident_id))]
             relationships = [dict(item) for item in connection.execute("""
                 SELECT CASE WHEN rel.resident_a=? THEN b.slug ELSE a.slug END otherSlug,
@@ -1646,8 +2431,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             season = connection.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
             if not season:
                 raise HTTPException(404, "season not found")
-            chronicles = [dict(row) for row in connection.execute("SELECT day,title,narrative,statistics_json FROM daily_chronicles WHERE season_id=? ORDER BY day", (season_id,))]
+            chronicles = [dict(row) for row in connection.execute("SELECT * FROM daily_chronicles WHERE season_id=? ORDER BY day", (season_id,))]
             report = connection.execute("SELECT * FROM reports WHERE season_id=?", (season_id,)).fetchone()
+            ledger, ledger_verification = _story_ledger(connection, season_id, limit=500)
             public_season = {
                 "id": int(season["id"]),
                 "number": int(season["number"]),
@@ -1665,7 +2451,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             public_chronicles = []
             for row in chronicles:
                 statistics = loads(row.pop("statistics_json"), {})
-                public_chronicles.append({**row, "statistics": statistics})
+                status = row.pop("verification_status", None)
+                verified = row.pop("verified", None)
+                ledger_ids = loads(row.pop("ledger_ids_json", "[]"), [])
+                public_chronicles.append({
+                    "day": int(row["day"]),
+                    "title": str(row["title"]),
+                    "narrative": str(row["narrative"]),
+                    "source": str(row.get("source", "legacy_model")),
+                    "createdAt": row.get("created_at"),
+                    "statistics": statistics,
+                    "ledgerIds": ledger_ids,
+                    "verificationStatus": str(status) if status is not None else (
+                        "verified" if verified else "unverified" if verified is not None else "legacy"
+                    ),
+                    "verified": bool(verified) if verified is not None else None,
+                })
             public_report = None
             if report:
                 public_report = {
@@ -1679,6 +2480,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "season": public_season,
                 "chronicles": public_chronicles,
                 "report": public_report,
+                "ledger": ledger,
+                "ledgerVerification": ledger_verification,
+                "epilogues": [entry for entry in ledger if entry["epilogue"]],
+                "goalEvidence": _goal_evidence(connection, season_id),
+                "modelCircuits": _model_circuits(connection, season_id),
             }
         finally:
             connection.close()

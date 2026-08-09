@@ -64,8 +64,8 @@ def _validate(
         raise ValueError("provider result must be an object")
     if kind in {"resident_intent", "resident_reflection"}:
         items = value.get("items")
-        if not isinstance(items, list) or not 1 <= len(items) <= 4:
-            raise ValueError("resident batch requires one to four items")
+        if not isinstance(items, list) or not 1 <= len(items) <= 24:
+            raise ValueError("resident batch requires one to twenty-four items")
         allowed_slugs = {
             str(resident.get("slug"))
             for resident in context.get("residents", [])
@@ -82,14 +82,28 @@ def _validate(
             if slug in seen:
                 raise ValueError("resident batch repeated a resident")
             seen.add(slug)
-            clean.append(
-                {
+            clean_item = {
                     "slug": _public(slug, 80),
                     "intention": _public(item.get("intention", ""), 240),
                     "reflection": _public(item.get("reflection", ""), 360),
                     "publicThought": _public(item.get("publicThought", ""), 280),
                 }
-            )
+            if kind == "resident_intent":
+                allowed_actions = {
+                    "restore_energy", "eat_meal", "wash_up", "seek_healthcare",
+                    "get_comfortable", "seek_safety", "have_fun", "socialize",
+                    "join_community", "get_privacy", "pursue_purpose",
+                    "reclaim_autonomy", "improve_finances", "secure_childcare",
+                }
+                action = str(item.get("preferredAction", "")).strip()
+                tags = item.get("preferenceTags", [])
+                clean_item["preferredAction"] = action if action in allowed_actions else ""
+                clean_item["preferenceTags"] = [
+                    _public(tag, 32).casefold()
+                    for tag in tags[:4]
+                    if isinstance(tag, str) and tag.strip()
+                ] if isinstance(tags, list) else []
+            clean.append(clean_item)
         if not clean:
             raise ValueError("resident batch contained no valid items")
         return {"items": clean}
@@ -161,14 +175,15 @@ class FakeProvider:
             for resident in context.get("residents", []):
                 slug = str(resident.get("slug", "resident"))
                 name = str(resident.get("name", slug.replace("-", " ").title()))
-                items.append(
-                    {
+                item = {
                         "slug": slug,
                         "intention": f"{name} will finish one useful task and notice who needs company.",
                         "reflection": f"{name} learned that ordinary routines can still change a relationship.",
                         "publicThought": "I should pay attention to the small choices that shape this place.",
                     }
-                )
+                if kind == "resident_intent":
+                    item.update({"preferredAction": "pursue_purpose", "preferenceTags": ["useful work"]})
+                items.append(item)
             result = {"items": items}
         elif kind == "conversation":
             names = context.get("names", ["Resident One", "Resident Two"])

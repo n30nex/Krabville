@@ -147,7 +147,8 @@ def resident_rows(connection: sqlite3.Connection, season_id: int) -> list[sqlite
                    s.mood, s.needs_json, s.path_json, s.action_until_tick,
                    s.updated_tick,v.life_stage,v.decision_state,v.current_decision_id,
                    v.household_id,v.care_state,v.current_caregiver_id,
-                   v.current_care_provider_id,caregiver.name caregiver_name,
+                   v.current_care_provider_id,v.preferred_action,v.preference_tags_json,
+                   caregiver.name caregiver_name,
                    care_provider.name care_provider_name
             FROM residents r
             JOIN resident_state s ON s.resident_id=r.id
