@@ -23,15 +23,26 @@ only when an intentionally slow deployment needs a wider bound.
 
 SQLite WAL permits an online, transactionally consistent backup while the
 simulation runs. This command writes a timestamped database beside the live
-database without copying transient `-wal` or `-shm` files:
+database, records release/schema/integrity metadata, and verifies the result:
 
 ```bash
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env exec -T engine \
-  python -c "import datetime,sqlite3; p='/data/backup-'+datetime.datetime.now(datetime.UTC).strftime('%Y%m%dT%H%M%SZ')+'.db'; s=sqlite3.connect('/data/krabville.db'); d=sqlite3.connect(p); s.backup(d); d.close(); s.close(); print(p)"
+  krabville-manage backup
 ```
 
-Keep only the backups your own retention policy requires. Posters and completed
-season data live under the configured data directory.
+Recheck a backup and rehearse its restore without touching the live database:
+
+```bash
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env exec -T engine \
+  krabville-manage verify-backup --backup /data/backups/krabville-UTC.db
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env exec -T engine \
+  krabville-manage restore --dry-run --backup /data/backups/krabville-UTC.db
+```
+
+The dry run restores to disposable storage, serves the public state read model,
+advances one deterministic tick, and exercises the fake provider. Keep only the
+backups your own retention policy requires. Posters and completed season data
+live under the configured data directory.
 
 ## Upgrade
 
