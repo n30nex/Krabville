@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["dist/**", "node_modules/**", "playwright-report/**", "test-results/**"],
+  "overrides": [
+    {
+      "files": ["src/main.ts"],
+      "rules": {
+        "no-unused-vars": ["warn", { "varsIgnorePattern": "^render(?:Poll|Ledger)$" }],
+        "no-useless-escape": "off"
+      }
+    }
+  ]
+}
