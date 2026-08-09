@@ -13,6 +13,7 @@ TARGETS = (
     "tests",
     "scripts",
     "tools/check_version.py",
+    "tools/profile_performance.py",
     "tools/verify_release.py",
 )
 
