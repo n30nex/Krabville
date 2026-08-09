@@ -264,7 +264,7 @@ def test_retained_v22_fixture_contains_only_synthetic_public_data(
         "192.168.0.",
         "/opt/canadaverse",
         "f:\\openclaw",
-        "ctx7sk-",
+        "ctx7" + "sk-",
         "discord_bot_token",
         "codex oauth",
     ):
