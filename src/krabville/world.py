@@ -83,13 +83,17 @@ def current_season(connection: sqlite3.Connection) -> sqlite3.Row | None:
     return _season_row(connection)
 
 
+def _season_chapter(season_number: int) -> str:
+    return ("spring", "summer", "fall", "winter")[
+        min(3, max(0, (season_number - 1) // 5))
+    ]
+
+
 def _weather(seed_hex: str, day: int, season_number: int = 1) -> dict[str, Any]:
     rng = _rng(seed_hex, "weather", season_number, day)
     # KVsim 2.1 tells one 20-season generational arc through four five-season
     # climate chapters. Season 20 and later remain winter until a new arc starts.
-    season_name = ("spring", "summer", "fall", "winter")[
-        min(3, max(0, (season_number - 1) // 5))
-    ]
+    season_name = _season_chapter(season_number)
     choices = {
         "spring": (
             ("clear", 15, 10), ("cloudy", 12, 15), ("rain", 10, 19),
@@ -1626,6 +1630,19 @@ def advance_tick(connection: sqlite3.Connection) -> dict[str, Any]:
         season = _season_row(connection)
         if not season or season["status"] != "running":
             return {"advanced": False, "status": season["status"] if season else "draft"}
+        weather = loads(season["weather_json"], {})
+        expected_season = _season_chapter(int(season["number"]))
+        if weather.get("season") != expected_season:
+            weather = _weather(
+                season["seed_hex"],
+                int(season["current_day"]),
+                int(season["number"]),
+            )
+            connection.execute(
+                "UPDATE seasons SET weather_json=? WHERE id=?",
+                (dumps(weather), season["id"]),
+            )
+            season = _season_row(connection)
         tick = int(season["current_tick"])
         if tick >= TARGET_TICKS:
             _complete_season(connection, season, final_tick=TARGET_TICKS, reason="natural")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from krabville.api import create_app
-from krabville.db import initialize
+from krabville.db import dumps, initialize
 from krabville.world import advance_tick, start_season
 
 
@@ -11,6 +11,11 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
     settings = settings_factory()
     connection = initialize(settings)
     start_season(connection, seed_hex="71" * 32)
+    connection.execute(
+        "UPDATE seasons SET weather_json=? WHERE number=1",
+        (dumps({"season": "summer", "condition": "heatwave", "temperatureC": 35}),),
+    )
+    connection.commit()
     connection.close()
     with TestClient(create_app(settings), base_url="http://testserver") as client:
         response = client.get("/api/v2/state")
@@ -26,6 +31,7 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
         assert v3.status_code == 200
         modern = v3.json()
         assert modern["schemaVersion"] == 3
+        assert modern["season"]["weather"]["season"] == "spring"
         assert modern["world"]["mapAsset"] == "/assets/kvsim-town-v21-spring.webp"
         assert set(modern["world"]["mapAssets"]) == {"spring", "summer", "fall", "winter"}
         assert modern["world"]["interiorsAsset"] == "/assets/interiors-v4.png"
