@@ -449,6 +449,12 @@ function interiorZone(activity: string): InteriorZone {
 }
 
 function interiorActorMarkup(occupants: InteriorResident[], sceneKey: string): string {
+  const placed: Array<readonly [number, number]> = [];
+  const fallbackSlots: ReadonlyArray<readonly [number, number]> = [
+    [22, 48], [40, 48], [58, 48], [76, 48],
+    [22, 64], [40, 64], [58, 64], [76, 64],
+    [22, 79], [40, 79], [58, 79], [76, 79],
+  ];
   return `<div class="interior-live-actors" data-scene="${h(sceneKey)}">${occupants.map((occupant, index) => {
     const resident = state?.residents.find((item) => item.slug === occupant.slug);
     const rosterIndex = Math.max(0, state?.residents.findIndex((item) => item.slug === occupant.slug) ?? stableHash(occupant.slug) % 12);
@@ -468,8 +474,20 @@ function interiorActorMarkup(occupants: InteriorResident[], sceneKey: string): s
     const hash = stableHash(`${sceneKey}:${occupant.slug}`);
     const jitterX = (hash % 5) - 2;
     const jitterY = ((hash >>> 5) % 5) - 2;
-    const left = Math.max(17, Math.min(83, zone.x + slotX + jitterX));
-    const top = Math.max(42, Math.min(82, zone.y + slotY + jitterY));
+    let left = Math.max(17, Math.min(83, zone.x + slotX + jitterX));
+    let top = Math.max(42, Math.min(82, zone.y + slotY + jitterY));
+    if (placed.some(([x, y]) => Math.hypot(left - x, top - y) < 10)) {
+      const start = hash % fallbackSlots.length;
+      for (let offset = 0; offset < fallbackSlots.length; offset += 1) {
+        const [candidateLeft, candidateTop] = fallbackSlots[(start + offset) % fallbackSlots.length] ?? [50, 64];
+        if (placed.every(([x, y]) => Math.hypot(candidateLeft - x, candidateTop - y) >= 10)) {
+          left = candidateLeft;
+          top = candidateTop;
+          break;
+        }
+      }
+    }
+    placed.push([left, top]);
     const walkX = ((hash >>> 9) % 2 ? 1 : -1) * (14 + (hash % 13));
     const walkY = ((hash >>> 12) % 2 ? 1 : -1) * (4 + (hash % 8));
     const duration = 5 + (hash % 5);

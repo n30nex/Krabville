@@ -13,7 +13,8 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
 
   await page.goto("/");
   await expect(page.locator("#live-state b")).toContainText(/running|paused|complete/i);
-  await expect(page.locator(".resident-row")).toHaveCount(12);
+  const initialState = await (await page.request.get("/api/v3/state")).json();
+  await expect(page.locator(".resident-row")).toHaveCount(initialState.residents.length);
   const canvas = page.locator("#world canvas");
   await expect(canvas).toBeVisible();
   await page.waitForTimeout(1_500);

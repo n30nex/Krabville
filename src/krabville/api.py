@@ -21,6 +21,7 @@ from .content import LOCATION_POINTS
 from .db import connect, dumps, initialize, loads, now_iso, transaction
 from .security import VoteSecurity, new_csrf
 from .runtime_v2 import account_balance, population_target_for_season
+from .world import _season_chapter, _weather
 
 
 class VoteRequest(BaseModel):
@@ -31,6 +32,14 @@ class VoteRequest(BaseModel):
 
 def _season(connection: sqlite3.Connection) -> sqlite3.Row | None:
     return connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+
+
+def _public_weather(season: sqlite3.Row) -> dict[str, Any]:
+    weather = loads(season["weather_json"], {})
+    season_number = int(season["number"])
+    if weather.get("season") != _season_chapter(season_number):
+        return _weather(season["seed_hex"], int(season["current_day"]), season_number)
+    return weather
 
 
 def _usage(
@@ -915,9 +924,7 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         )
         """
     ).fetchone()[0])
-    exterior_season = ("spring", "summer", "fall", "winter")[
-        min(3, max(0, (season_number - 1) // 5))
-    ]
+    exterior_season = _season_chapter(season_number)
     map_assets = {
         name: f"/assets/kvsim-town-v21-{name}.webp"
         for name in ("spring", "summer", "fall", "winter")
@@ -1174,7 +1181,7 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
             "revealedSeed": season["seed_hex"] if season["seed_revealed"] else None,
             "modelLocked": bool(season["model_locked"]),
             "modelDegraded": bool(season["model_degraded"]),
-            "weather": loads(season["weather_json"], {}),
+            "weather": _public_weather(season),
             "startedAt": season["started_at"],
             "completedAt": season["completed_at"],
             "completionReason": season["completion_reason"],
@@ -1653,7 +1660,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "currentTick": int(season["current_tick"]),
                 "targetTicks": int(season["target_ticks"]),
                 "completionReason": season["completion_reason"],
-                "weather": loads(season["weather_json"], {}),
+                "weather": _public_weather(season),
             }
             public_chronicles = []
             for row in chronicles:
