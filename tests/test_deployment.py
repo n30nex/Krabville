@@ -8,10 +8,20 @@ from krabville import __version__
 ROOT = Path(__file__).parents[1]
 
 
-def test_compose_unit_stops_profile_services() -> None:
-    unit = (ROOT / "deploy" / "krabville-compose.service").read_text(encoding="utf-8")
-    stop = next(line for line in unit.splitlines() if line.startswith("ExecStop="))
-    assert "--profile inference stop" in stop
+def test_systemd_health_gates_and_supervises_inference() -> None:
+    compose_unit = (ROOT / "deploy" / "krabville-compose.service").read_text(encoding="utf-8")
+    inference_unit = (ROOT / "deploy" / "krabville-inference.service").read_text(encoding="utf-8")
+    supervisor = (ROOT / "deploy" / "run-inference-service.sh").read_text(encoding="utf-8")
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+    assert "Before=krabville-inference.service" in compose_unit
+    assert "up -d web engine" in compose_unit
+    assert "up -d web engine inference" not in compose_unit
+    assert "Requires=krabville-compose.service" in inference_unit
+    assert "After=krabville-compose.service" in inference_unit
+    assert "Restart=on-failure" in inference_unit
+    assert "docker wait" in supervisor
+    assert 'restart: "no"' in compose
 
 
 def test_release_versions_match() -> None:

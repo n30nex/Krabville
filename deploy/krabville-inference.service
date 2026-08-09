@@ -1,0 +1,20 @@
+[Unit]
+Description=Krabville inference worker supervisor
+Requires=krabville-compose.service
+After=krabville-compose.service
+PartOf=krabville-compose.service
+
+[Service]
+Type=simple
+User=neonx
+Group=docker
+WorkingDirectory=/opt/canadaverse/krabville-v2
+ExecStartPre=/usr/bin/docker compose --env-file deploy/.env --profile inference config -q
+ExecStart=/opt/canadaverse/krabville-v2/deploy/run-inference-service.sh
+ExecStop=/usr/bin/docker compose --env-file deploy/.env --profile inference stop -t 20 inference
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

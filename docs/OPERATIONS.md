@@ -50,6 +50,9 @@ only while all three services are stopped.
 - `web` and `engine` should be running and healthy during an active season.
 - `inference` may exit successfully after the configured final season. That is
   healthy and prevents post-season calls.
+- On systemd hosts, install both `deploy/krabville-compose.service` and
+  `deploy/krabville-inference.service`. The first health-gates web and engine;
+  the second starts and supervises inference only after those gates pass.
 - A model-degraded state does not stop deterministic simulation time.
 - A completed or operator-paused season should not be treated as a crash.
 
