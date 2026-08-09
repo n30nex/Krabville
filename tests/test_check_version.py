@@ -33,7 +33,9 @@ def test_check_version_command_accepts_repository() -> None:
     )
 
 
-def test_check_version_reports_package_compose_and_migration_drift(tmp_path: Path) -> None:
+def test_check_version_reports_package_compose_and_migration_drift(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "repo"
     for relative in (
         "frontend/package.json",
@@ -45,7 +47,10 @@ def test_check_version_reports_package_compose_and_migration_drift(tmp_path: Pat
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)
-    shutil.copytree(ROOT / "src" / "krabville" / "migrations", root / "src" / "krabville" / "migrations")
+    shutil.copytree(
+        ROOT / "src" / "krabville" / "migrations",
+        root / "src" / "krabville" / "migrations",
+    )
 
     package_path = root / "frontend" / "package.json"
     package = json.loads(package_path.read_text(encoding="utf-8"))
@@ -67,12 +72,16 @@ def test_check_version_reports_package_compose_and_migration_drift(tmp_path: Pat
     assert any("migration versions are not contiguous" in error for error in errors)
 
 
-def test_release_inputs_match_runtime_health_and_schema(settings_factory, monkeypatch) -> None:
+def test_release_inputs_match_runtime_health_and_schema(
+    settings_factory, monkeypatch
+) -> None:
     metadata, static_errors = check_repository(ROOT)
     assert static_errors == []
     release_commit = "a" * 40
     release_tag = f"v{metadata['version']}"
-    monkeypatch.setattr(version_check, "_git_tag_commit", lambda _root, _tag: release_commit)
+    monkeypatch.setattr(
+        version_check, "_git_tag_commit", lambda _root, _tag: release_commit
+    )
     settings = settings_factory(release_commit=release_commit)
     connection = initialize(settings)
     connection.close()
@@ -96,7 +105,10 @@ def test_release_inputs_match_runtime_health_and_schema(settings_factory, monkey
     assert errors == []
 
     _, errors = check_repository(ROOT, release_tag=release_tag)
-    assert "release checks require --release-tag, --release-commit, and --schema-version" in errors
+    assert (
+        "release checks require --release-tag, --release-commit, and --schema-version"
+        in errors
+    )
 
     _, errors = check_repository(
         ROOT,
