@@ -14,10 +14,10 @@ python scripts/check_python_quality.py
 ```
 
 The gate runs Ruff lint and formatter verification across `src`, `tests`, `scripts`,
-and the unified verifier. The exact baseline debt is machine-readable in
+and both release tools. The exact baseline debt is machine-readable in
 `scripts/ruff_baseline.json`: 15 lint findings and 36 files that predate Ruff
-formatting. Existing findings may be removed, but any new lint finding or newly
-unformatted Python file fails the command.
+formatting. Any difference from that exact baseline fails the command; intentional
+cleanup must refresh the baseline in the same change.
 
 Measure line and branch coverage without enforcing a threshold yet:
 
@@ -65,9 +65,10 @@ python tools/verify_release.py
 ```
 
 The Python entrypoint is the only release-check invocation used by CI. In order, it
-runs Python quality, the complete Python suite, a wheel build, frontend lint/build,
-Compose validation, the tracked-secret scan, a seeded API health check, and every
-Playwright project. The runtime always uses a temporary data directory and a free
+runs release identity/schema consistency, Python quality, the complete Python suite,
+a wheel build, frontend lint/build, Compose validation, the tracked-secret scan, a
+seeded API health check, and every Playwright project. The runtime always uses a
+temporary data directory and a free
 loopback port; ambient `KRABVILLE_*` settings are discarded. Per-run command output,
 API health/server logs, wheel output, and Playwright failure evidence remain under
 `.qa/verify-release/`.

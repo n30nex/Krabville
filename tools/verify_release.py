@@ -30,6 +30,7 @@ SECRET_PATTERN = "".join(
     )
 )
 RELEASE_CHECK_ORDER = (
+    "Release identity",
     "Python quality",
     "Python tests",
     "Python wheel",
@@ -57,6 +58,7 @@ def ordered_checks(
     wheel_dir: Path, *, npm: str = "npm", docker: str = "docker"
 ) -> tuple[Check, ...]:
     return (
+        Check("Release identity", (sys.executable, "tools/check_version.py")),
         Check("Python quality", (sys.executable, "scripts/check_python_quality.py")),
         Check("Python tests", (sys.executable, "-m", "pytest")),
         Check(

@@ -28,19 +28,25 @@ def _python_version(path: Path) -> str:
             isinstance(target, ast.Name) and target.id == "__version__"
             for target in node.targets
         ):
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            if isinstance(node.value, ast.Constant) and isinstance(
+                node.value.value, str
+            ):
                 return node.value.value
     raise ValueError(f"missing string __version__ in {path}")
 
 
 def _git_head(root: Path) -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip().lower()
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .lower()
+    )
 
 
 def _git_tag_commit(root: Path, tag: str) -> str | None:
@@ -54,7 +60,9 @@ def _git_tag_commit(root: Path, tag: str) -> str | None:
 
 
 def _health_payload(url: str) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"User-Agent": "krabville-version-check"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "krabville-version-check"}
+    )
     with urllib.request.urlopen(request, timeout=10) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
@@ -72,8 +80,12 @@ def check_repository(
     head_commit: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    package = json.loads((root / "frontend" / "package.json").read_text(encoding="utf-8"))
-    lock = json.loads((root / "frontend" / "package-lock.json").read_text(encoding="utf-8"))
+    package = json.loads(
+        (root / "frontend" / "package.json").read_text(encoding="utf-8")
+    )
+    lock = json.loads(
+        (root / "frontend" / "package-lock.json").read_text(encoding="utf-8")
+    )
     compose = (root / "compose.yaml").read_text(encoding="utf-8")
 
     version = str(pyproject["project"]["version"])
@@ -100,7 +112,9 @@ def check_repository(
         errors.append("compose.yaml does not pass through KRABVILLE_RELEASE_COMMIT")
 
     migration_paths = sorted((root / "src" / "krabville" / "migrations").glob("*.sql"))
-    malformed = [path.name for path in migration_paths if not MIGRATION_RE.fullmatch(path.name)]
+    malformed = [
+        path.name for path in migration_paths if not MIGRATION_RE.fullmatch(path.name)
+    ]
     migration_versions = [
         int(match.group(1))
         for path in migration_paths
@@ -110,15 +124,23 @@ def check_repository(
     if malformed:
         errors.append(f"invalid migration filename(s): {', '.join(malformed)}")
     if migration_versions != list(range(1, schema + 1)):
-        errors.append(f"migration versions are not contiguous through {schema}: {migration_versions}")
+        errors.append(
+            f"migration versions are not contiguous through {schema}: {migration_versions}"
+        )
 
     release_values = (release_tag, release_commit, release_schema)
     release_mode = any(value is not None for value in release_values)
     release_complete = all(value is not None for value in release_values)
     if release_mode and not release_complete:
-        errors.append("release checks require --release-tag, --release-commit, and --schema-version")
+        errors.append(
+            "release checks require --release-tag, --release-commit, and --schema-version"
+        )
     elif release_mode:
-        assert release_tag is not None and release_commit is not None and release_schema is not None
+        assert (
+            release_tag is not None
+            and release_commit is not None
+            and release_schema is not None
+        )
         if release_tag != f"v{version}":
             errors.append(f"release tag {release_tag!r} must be 'v{version}'")
         release_commit = release_commit.lower()
@@ -127,7 +149,9 @@ def check_repository(
         else:
             head = (head_commit or _git_head(root)).lower()
             if release_commit != head:
-                errors.append(f"release commit {release_commit} does not match HEAD {head}")
+                errors.append(
+                    f"release commit {release_commit} does not match HEAD {head}"
+                )
             tag_commit = _git_tag_commit(root, release_tag)
             if tag_commit is None:
                 errors.append(f"release tag {release_tag!r} cannot be resolved")
@@ -136,7 +160,9 @@ def check_repository(
                     f"release tag {release_tag} points to {tag_commit}, not {release_commit}"
                 )
         if release_schema != schema:
-            errors.append(f"release schema {release_schema} does not match latest migration {schema}")
+            errors.append(
+                f"release schema {release_schema} does not match latest migration {schema}"
+            )
 
     if health is not None:
         if not release_mode or not release_complete:
@@ -181,7 +207,13 @@ def main(argv: list[str] | None = None) -> int:
             release_schema=args.schema_version,
             health=health,
         )
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+        subprocess.SubprocessError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

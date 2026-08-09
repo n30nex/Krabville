@@ -28,14 +28,15 @@ def test_release_checks_are_complete_and_ordered(tmp_path: Path):
         )
         == verify_release.RELEASE_CHECK_ORDER
     )
-    assert checks[0].command == (
+    assert checks[0].command == (sys.executable, "tools/check_version.py")
+    assert checks[1].command == (
         sys.executable,
         "scripts/check_python_quality.py",
     )
-    assert checks[2].command[:4] == (sys.executable, "-m", "pip", "wheel")
-    assert checks[3].command == ("npm-test", "run", "lint")
-    assert checks[4].command == ("npm-test", "run", "build")
-    assert checks[5].command[:2] == ("docker-test", "compose")
+    assert checks[3].command[:4] == (sys.executable, "-m", "pip", "wheel")
+    assert checks[4].command == ("npm-test", "run", "lint")
+    assert checks[5].command == ("npm-test", "run", "build")
+    assert checks[6].command[:2] == ("docker-test", "compose")
 
 
 def test_runtime_environment_discards_ambient_krabville_configuration(
