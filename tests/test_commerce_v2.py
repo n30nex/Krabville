@@ -382,3 +382,55 @@ def test_dependents_are_not_billed_and_old_personal_debt_is_reversed(settings_fa
         """
     ))
     connection.close()
+
+
+def test_daily_settlement_reuses_a_closed_emergency_credit_account(settings_factory) -> None:
+    connection = initialize(settings_factory())
+    start_season(connection, seed_hex="97" * 32)
+    season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
+    teen = connection.execute(
+        """
+        SELECT r.id FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.current_stage='teen' ORDER BY r.id LIMIT 1
+        """
+    ).fetchone()
+    account_id = int(connection.execute(
+        """
+        INSERT INTO financial_accounts(
+          resident_id,name,account_type,opening_balance_cents,status,
+          opened_season_id,opened_tick,closed_season_id,closed_tick
+        ) VALUES(?,'Emergency credit','loan',0,'closed',?,0,?,0) RETURNING id
+        """,
+        (teen["id"], season["id"], season["id"]),
+    ).fetchone()[0])
+    connection.execute(
+        """
+        INSERT INTO debts(
+          borrower_account_id,debt_type,principal_cents,outstanding_cents,
+          annual_rate_basis_points,minimum_payment_cents,opened_season_id,opened_tick,
+          closed_season_id,closed_tick,status
+        ) VALUES(?,'credit',5000,0,750,2500,?,0,?,0,'forgiven')
+        """,
+        (account_id, season["id"], season["id"]),
+    )
+
+    settle_daily_economy(connection, int(season["id"]), 0, 48)
+
+    account = connection.execute(
+        "SELECT id,status,closed_season_id,closed_tick FROM financial_accounts WHERE resident_id=? AND name='Emergency credit'",
+        (teen["id"],),
+    ).fetchone()
+    assert account["id"] == account_id
+    assert account["status"] == "open"
+    assert account["closed_season_id"] is None
+    assert account["closed_tick"] is None
+    assert connection.execute(
+        "SELECT COUNT(*) FROM financial_accounts WHERE resident_id=? AND name='Emergency credit'",
+        (teen["id"],),
+    ).fetchone()[0] == 1
+    current = connection.execute(
+        "SELECT outstanding_cents FROM debts WHERE borrower_account_id=? AND status='current'",
+        (account_id,),
+    ).fetchone()
+    assert current and current["outstanding_cents"] > 0
+    connection.close()

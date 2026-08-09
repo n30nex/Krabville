@@ -1778,13 +1778,28 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
             )
             debt_account_id = int(debt["account_id"])
         elif int(after["debt_cents"]) > 0:
-            debt_account_id = int(connection.execute(
-                """
-                INSERT INTO financial_accounts(resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick)
-                VALUES(?,'Emergency credit','loan',0,?,?) RETURNING id
-                """,
-                (row["id"], season_id, tick),
-            ).fetchone()[0])
+            prior_account = connection.execute(
+                "SELECT id FROM financial_accounts WHERE resident_id=? AND name='Emergency credit'",
+                (row["id"],),
+            ).fetchone()
+            if prior_account:
+                debt_account_id = int(prior_account["id"])
+                connection.execute(
+                    """
+                    UPDATE financial_accounts SET account_type='loan',status='open',
+                      closed_season_id=NULL,closed_tick=NULL WHERE id=?
+                    """,
+                    (debt_account_id,),
+                )
+            else:
+                debt_account_id = int(connection.execute(
+                    """
+                    INSERT INTO financial_accounts(
+                      resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
+                    ) VALUES(?,'Emergency credit','loan',0,?,?) RETURNING id
+                    """,
+                    (row["id"], season_id, tick),
+                ).fetchone()[0])
             connection.execute(
                 """
                 INSERT INTO debts(
