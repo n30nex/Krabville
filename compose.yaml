@@ -1,7 +1,7 @@
 name: krabville
 
 x-runtime: &runtime
-  image: krabville:2.2.0
+  image: krabville:2.2.1
   build:
     context: .
   user: "${KRABVILLE_UID:-1000}:${KRABVILLE_GID:-1000}"
@@ -101,7 +101,9 @@ services:
     <<: *runtime
     profiles: [inference]
     command: [krabville-inference-entrypoint]
-    restart: on-failure:3
+    # systemd owns worker restart and boot ordering in production. Portable
+    # Compose installs can start this profile explicitly after engine health.
+    restart: "no"
     mem_limit: 1024m
     cpus: 1.50
     pids_limit: 192
