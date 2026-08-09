@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = Path(__file__).with_name("ruff_baseline.json")
-TARGETS = ("src", "tests", "scripts")
+TARGETS = ("src", "tests", "scripts", "tools/verify_release.py")
 
 
 def run_ruff(*arguments: str) -> subprocess.CompletedProcess[str]:

@@ -13,10 +13,11 @@ python -m pip install '.[test]'
 python scripts/check_python_quality.py
 ```
 
-The gate runs Ruff lint and formatter verification across `src`, `tests`, and `scripts`.
-The exact baseline debt is machine-readable in `scripts/ruff_baseline.json`: 18 lint
-findings and 36 files that predate Ruff formatting. Existing findings may be removed,
-but any new lint finding or newly unformatted Python file fails the command.
+The gate runs Ruff lint and formatter verification across `src`, `tests`, `scripts`,
+and the unified verifier. The exact baseline debt is machine-readable in
+`scripts/ruff_baseline.json`: 15 lint findings and 36 files that predate Ruff
+formatting. Existing findings may be removed, but any new lint finding or newly
+unformatted Python file fails the command.
 
 Measure line and branch coverage without enforcing a threshold yet:
 
@@ -48,3 +49,25 @@ Oxlint checks correctness rules across frontend source, scripts, and build/test
 configuration. The config narrowly accepts three pre-existing findings in
 `src/main.ts`; warnings elsewhere fail the command. TypeScript compilation remains
 part of `npm run build`.
+
+## Unified release verification
+
+Prepare the pinned Python and frontend dependencies and install Playwright Chromium,
+then run the release gate from the repository root:
+
+```bash
+python -m pip install '.[test]'
+cd frontend
+npm ci --ignore-scripts
+npx playwright install chromium
+cd ..
+python tools/verify_release.py
+```
+
+The Python entrypoint is the only release-check invocation used by CI. In order, it
+runs Python quality, the complete Python suite, a wheel build, frontend lint/build,
+Compose validation, the tracked-secret scan, a seeded API health check, and every
+Playwright project. The runtime always uses a temporary data directory and a free
+loopback port; ambient `KRABVILLE_*` settings are discarded. Per-run command output,
+API health/server logs, wheel output, and Playwright failure evidence remain under
+`.qa/verify-release/`.
