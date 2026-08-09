@@ -20,6 +20,7 @@ test = [
   "httpx2==2.9.1",
   "pytest==9.1.1",
   "pytest-cov==7.0.0",
+  "ruff==0.15.6",
 ]
 
 [project.scripts]
@@ -34,3 +35,17 @@ packages = ["src/krabville"]
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.coverage.run]
+branch = true
+source = ["krabville"]
+
+[tool.coverage.report]
+precision = 1
+show_missing = true
