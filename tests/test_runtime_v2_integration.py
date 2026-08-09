@@ -291,7 +291,7 @@ def _run_scenario(settings) -> dict[str, str]:
         """,
         (first_id,),
     ))
-    assert len(births) == 2
+    assert len(births) == 1
     for birth in births:
         child_traits = loads(birth["traits_json"], {})
         parent_traits = loads(birth["parent_traits"], {})
@@ -339,3 +339,79 @@ def test_runtime_v2_complete_season_boundaries_and_replay(settings_factory) -> N
     first = _run_scenario(settings_factory(name="first"))
     second = _run_scenario(settings_factory(name="replay"))
     assert first == second
+
+
+def test_twenty_season_population_arc_reaches_24_without_care_or_housing_gaps(settings_factory) -> None:
+    connection = initialize(settings_factory(name="twenty-season-growth"))
+    populations = []
+    for number in range(1, 21):
+        season = start_season(connection, seed_hex=f"{number:02x}" * 32)
+        assert season["number"] == number
+        _finish_naturally(connection, int(season["seasonId"]))
+        populations.append(int(connection.execute(
+            "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1"
+        ).fetchone()[0]))
+
+    assert populations == [13, 14, 14, 15, 15, 16, 17, 17, 18, 18, 19, 20, 20, 21, 21, 22, 23, 23, 24, 24]
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM resident_lifecycle life
+        WHERE life.alive=1 AND NOT EXISTS (
+          SELECT 1 FROM household_members hm
+          JOIN property_occupancy po ON po.household_id=hm.household_id AND po.ended_season_id IS NULL
+          WHERE hm.resident_id=life.resident_id AND hm.ended_season_id IS NULL
+        )
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT p.id,p.resident_capacity,COUNT(DISTINCT hm.resident_id) residents
+          FROM properties p JOIN property_occupancy po ON po.property_id=p.id AND po.ended_season_id IS NULL
+          JOIN household_members hm ON hm.household_id=po.household_id AND hm.ended_season_id IS NULL
+          JOIN resident_lifecycle life ON life.resident_id=hm.resident_id AND life.alive=1
+          GROUP BY p.id HAVING residents>p.resident_capacity
+        )
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM resident_lifecycle life
+        WHERE life.alive=1 AND life.current_stage IN ('baby','child') AND NOT EXISTS (
+          SELECT 1 FROM childcare_arrangements care
+          WHERE care.child_resident_id=life.resident_id AND care.status='active'
+        )
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM resident_lifecycle life
+        WHERE life.alive=1 AND life.current_stage='adult' AND NOT EXISTS (
+          SELECT 1 FROM employment work WHERE work.resident_id=life.resident_id AND work.status='active'
+        )
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM resident_lifecycle life
+        JOIN household_members hm ON hm.resident_id=life.resident_id AND hm.ended_season_id IS NULL
+        WHERE life.alive=0
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM resident_lifecycle life
+        JOIN financial_accounts account ON account.resident_id=life.resident_id AND account.status='open'
+        WHERE life.alive=0
+        """
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT property_id FROM property_occupancy WHERE ended_season_id IS NULL
+          GROUP BY property_id HAVING COUNT(*)>1
+        )
+        """
+    ).fetchone()[0] >= 1
+    assert list(connection.execute("PRAGMA foreign_key_check")) == []
+    connection.close()

@@ -251,6 +251,90 @@ CATALOG: tuple[tuple[Any, ...], ...] = tuple(sum([
         ("Calculator", 2499), ("Art smock", 1999),
         ("Building bricks", 3999),
     ], durability=72, need="care", restore=8),
+    _goods("fresh food", "grocery", [
+        ("Pineapple", 699), ("Mangoes", 649), ("Kiwi fruit", 549),
+        ("Sweet potatoes", 599), ("Kale", 449), ("Asparagus", 699),
+        ("Shrimp", 1499), ("Goat cheese", 899),
+    ], consumable=True, perish_days=4, need="hunger", restore=14),
+    _goods("pantry", "grocery", [
+        ("Couscous", 549), ("Barley", 499), ("Kidney beans", 349),
+        ("Coconut milk", 399), ("Curry paste", 599), ("Soy sauce", 649),
+        ("Baking powder", 449), ("Dried fruit", 799),
+    ], consumable=True, perish_days=45, need="hunger", restore=10),
+    _goods("prepared food", "cafe", [
+        ("Ramen bowl", 1399), ("Burrito", 1199), ("Curry bowl", 1499),
+        ("Pasta dinner", 1599), ("Fish and chips", 1699), ("Poutine", 1199),
+        ("Fruit smoothie", 699), ("Cinnamon roll", 499),
+    ], consumable=True, perish_days=1, need="hunger", restore=19),
+    _goods("snacks", "cafe", [
+        ("Pretzels", 449), ("Nachos", 649), ("Candy bag", 399),
+        ("Protein bar", 499), ("Mixed nuts", 799), ("Gummy bears", 349),
+    ], consumable=True, perish_days=25, need="fun", restore=8),
+    _goods("hygiene", "pharmacy", [
+        ("Face wash", 799), ("Lip balm", 399), ("Hair comb", 599),
+        ("Hair dryer", 3499), ("Bath salts", 899), ("Washcloth", 499),
+        ("Nail file", 399), ("Foot powder", 699),
+    ], consumable=True, perish_days=90, need="hygiene", restore=16),
+    _goods("medicine", "pharmacy", [
+        ("Cough drops", 499), ("Eye drops", 899), ("Antiseptic", 699),
+        ("Gauze roll", 599), ("Motion sickness tablets", 899),
+        ("Sleep aid", 1099), ("Inhaler", 2499), ("Medical masks", 799),
+    ], consumable=True, perish_days=90, need="health", restore=15),
+    _goods("household", "general", [
+        ("Dish rack", 2499), ("Can opener", 1299), ("Cutting board", 1999),
+        ("Chef knife", 3999), ("Measuring cups", 1499), ("Colander", 1999),
+        ("Fire extinguisher", 4999), ("Smoke alarm", 2999),
+        ("Surge protector", 2499), ("Drying rack", 3999),
+    ], durability=84, need="comfort", restore=9),
+    _goods("furnishings", "general", [
+        ("Bookshelf", 14999), ("Coffee table", 11999), ("Dining table", 22999),
+        ("Armchair", 19999), ("Bunk bed", 29999), ("Kitchen stool", 5999),
+        ("Writing desk", 15999), ("Office chair", 12999),
+        ("Patio set", 34999), ("Shoe rack", 6999),
+    ], durability=86, need="comfort", restore=11),
+    _goods("clothing", "outfitter", [
+        ("Polo shirt", 2999), ("Cardigan", 5499), ("Denim jacket", 7999),
+        ("Fleece jacket", 6999), ("Cargo pants", 5999), ("Leggings", 3999),
+        ("Athletic shorts", 3499), ("Track jacket", 6499),
+        ("Business suit", 16999), ("Evening dress", 15999),
+        ("Medical scrubs", 6999), ("Lab coat", 7499),
+    ], durability=77, need="comfort", restore=7),
+    _goods("accessories", "outfitter", [
+        ("Brooch", 4999), ("Hair clip", 999), ("Messenger bag", 6999),
+        ("Duffel bag", 7999), ("Coin purse", 1999), ("Watch band", 2499),
+        ("Lanyard", 999), ("Travel umbrella", 2499),
+    ], durability=78, need="comfort", restore=5),
+    _goods("outdoors", "outfitter", [
+        ("Kayak paddle", 6999), ("Hiking poles", 5999),
+        ("Picnic blanket", 3499), ("Thermos", 2499), ("Camp chair", 4999),
+        ("Hammock", 6999), ("Bike lock", 2999), ("Snowshoes", 9999),
+    ], durability=86, need="safety", restore=9),
+    _goods("hardware", "hardware", [
+        ("Cordless drill", 12999), ("Spirit level", 2499), ("Hand saw", 3999),
+        ("Utility knife", 1999), ("Socket set", 6999), ("Sandpaper", 899),
+        ("Paint brush", 1499), ("Step ladder", 7999),
+    ], durability=90, need="purpose", restore=8),
+    _goods("electronics", "electronics", [
+        ("Smartwatch", 19999), ("Wireless earbuds", 9999),
+        ("Laptop stand", 3999), ("Computer mouse", 2999), ("Keyboard", 4999),
+        ("Monitor", 24999), ("Projector", 39999), ("Streaming stick", 6999),
+    ], durability=87, need="fun", restore=10),
+    _goods("books", "books", [
+        ("Biography", 2199), ("Graphic novel", 1899), ("Gardening guide", 2499),
+        ("Parenting guide", 2499), ("Finance book", 2999), ("Travel guide", 2299),
+    ], durability=74, need="fun", restore=11),
+    _goods("hobby", "hobby", [
+        ("Ukulele", 12999), ("Violin", 24999), ("Telescope", 19999),
+        ("Roller skates", 8999), ("Hockey stick", 6999), ("Model train", 12999),
+    ], durability=75, need="fun", restore=14),
+    _goods("childcare", "school", [
+        ("Baby carrier", 8999), ("Playpen", 15999),
+        ("Teething ring", 799), ("Diaper bag", 5999),
+    ], durability=74, need="care", restore=8),
+    _goods("garden", "garden", [
+        ("Garden rake", 2999), ("Garden hoe", 2999),
+        ("Bird feeder", 3999), ("Rain barrel", 8999),
+    ], durability=76, need="purpose", restore=8),
 ], []))
 
 
@@ -568,6 +652,11 @@ ITEM_ASSET_ALIASES = {
     "art-smock": "school-uniform", "building-bricks": "toy-blocks",
 }
 ITEM_ASSET_INDEX.update({sku: ITEM_ASSET_INDEX[source] for sku, source in ITEM_ASSET_ALIASES.items()})
+_V21_ASSET_KEYS = tuple(ITEM_ASSET_ALIASES) + tuple(
+    str(item[0]) for item in CATALOG if item[0] not in ITEM_ASSET_INDEX
+)
+assert len(_V21_ASSET_KEYS) == 256
+ITEM_ASSET_INDEX.update({sku: 196 + index for index, sku in enumerate(_V21_ASSET_KEYS)})
 
 
 def item_asset_index(asset_key: str) -> int:
@@ -608,19 +697,31 @@ SHOP_DEFINITIONS = (
     ("harbour-pharmacy", "Harbour Pharmacy", "pharmacy", "Lagoon Clinic", "shop", 17),
     ("tideway-outfitters", "Tideway Outfitters", "outfitter", "Ferry Dock", "shop", 19),
     ("lagoon-ferry", "Lagoon Ferry", "shipping", "Ferry Dock", "office", 22),
+    ("tide-market", "Tide Market", "grocery", "Tide Market", "shop", 14),
+    ("canal-childcare", "Canal Childcare", "childcare", "Canal Childcare", "daycare", 29),
+    ("lagoon-bakery", "Lagoon Bakery", "cafe", "Lagoon Bakery", "shop", 30),
+    ("boardwalk-restaurant", "Boardwalk Restaurant", "food", "Boardwalk Restaurant", "shop", 31),
+    ("lagoon-cinema", "Lagoon Cinema", "entertainment", "Lagoon Cinema", "recreation", 33),
+    ("tide-theatre", "Tide Theatre", "entertainment", "Tide Theatre", "recreation", 34),
+    ("krabville-gym", "Krabville Gym", "fitness", "Krabville Gym", "recreation", 35),
+    ("shoreline-arcade", "Shoreline Arcade", "entertainment", "Shoreline Arcade", "recreation", 36),
+    ("northstar-electronics", "Northstar Electronics", "electronics", "Northstar Electronics", "shop", 37),
+    ("harbour-hardware", "Harbour Hardware", "hardware", "Harbour Hardware", "shop", 38),
+    ("seagrass-laundry", "Seagrass Laundry", "services", "Seagrass Laundry", "shop", 39),
+    ("harbour-community-hall", "Harbour Community Hall", "community", "Town Square", "civic", 40),
 )
 
 SPECIALTY_BUSINESSES = {
-    "grocery": ("Lagoon General Store",),
-    "cafe": ("Blue Kettle Cafe", "Lagoon General Store"),
+    "grocery": ("Tide Market", "Lagoon General Store"),
+    "cafe": ("Blue Kettle Cafe", "Lagoon Bakery", "Boardwalk Restaurant", "Lagoon General Store"),
     "pharmacy": ("Harbour Pharmacy", "Lagoon Health Centre"),
-    "general": ("Lagoon General Store",),
+    "general": ("Lagoon General Store", "Tide Market"),
     "outfitter": ("Tideway Outfitters",),
-    "hardware": ("Harbour Works", "Lagoon General Store"),
-    "electronics": ("Signal House", "Dockside Studio"),
+    "hardware": ("Harbour Hardware", "Harbour Works", "Lagoon General Store"),
+    "electronics": ("Northstar Electronics", "Signal House", "Dockside Studio"),
     "books": ("Harbour Library", "Lagoon General Store"),
-    "hobby": ("Dockside Studio", "Lagoon General Store"),
-    "school": ("Krabville School", "Lagoon General Store"),
+    "hobby": ("Shoreline Arcade", "Dockside Studio", "Lagoon General Store"),
+    "school": ("Canal Childcare", "Krabville School", "Lagoon General Store"),
     "garden": ("Tideway Gardens", "Lagoon General Store"),
 }
 
@@ -652,26 +753,44 @@ def _ensure_shop(
         (slug, name, name),
     ).fetchone()
     if business:
-        return int(business[0])
-    property_id = int(connection.execute(
-        """
-        INSERT INTO properties(
-          slug,name,property_type,address,exterior_key,interior_key,resident_capacity,
-          business_capacity,market_value_cents,status,created_tick,map_location,interior_variant
-        ) VALUES(?,?,?,?,?,'shop',0,12,32000000,'occupied',0,?,?) RETURNING id
-        """,
-        (f"property-{slug}", name, property_type, location, slug, location, interior_variant),
-    ).fetchone()[0])
-    business_id = int(connection.execute(
-        """
-        INSERT INTO businesses(slug,name,industry,property_id,status,valuation_cents,reputation,created_at)
-        VALUES(?,?,?,?,'active',14500000,55,?) RETURNING id
-        """,
-        (slug, name, industry, property_id, _now()),
-    ).fetchone()[0])
+        business_id = int(business[0])
+    else:
+        property_id = int(connection.execute(
+            """
+            INSERT INTO properties(
+              slug,name,property_type,address,exterior_key,interior_key,resident_capacity,
+              business_capacity,market_value_cents,status,created_tick,map_location,interior_variant
+            ) VALUES(?,?,?,?,?,'shop',0,12,32000000,'occupied',0,?,?) RETURNING id
+            """,
+            (f"property-{slug}", name, property_type, location, slug, location, interior_variant),
+        ).fetchone()[0])
+        business_id = int(connection.execute(
+            """
+            INSERT INTO businesses(slug,name,industry,property_id,status,valuation_cents,reputation,created_at)
+            VALUES(?,?,?,?,'active',14500000,55,?) RETURNING id
+            """,
+            (slug, name, industry, property_id, _now()),
+        ).fetchone()[0])
     connection.execute(
-        "INSERT INTO financial_accounts(business_id,name,account_type,opening_balance_cents,opened_tick) VALUES(?,'Operating','business',2500000,0)",
+        "INSERT OR IGNORE INTO financial_accounts(business_id,name,account_type,opening_balance_cents,opened_tick) VALUES(?,'Operating','business',2500000,0)",
         (business_id,),
+    )
+    job_titles = {
+        "grocery": "market clerk", "childcare": "early childhood educator",
+        "cafe": "baker", "food": "restaurant worker", "entertainment": "venue host",
+        "fitness": "fitness coach", "electronics": "electronics technician",
+        "hardware": "hardware clerk", "services": "service attendant",
+        "community": "community coordinator", "pharmacy": "pharmacy assistant",
+        "outfitter": "outfitter", "shipping": "shipping coordinator",
+    }
+    title = job_titles.get(industry, "shop worker")
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO jobs(
+          business_id,slug,title,category,minimum_life_stage,hourly_wage_cents,weekly_hours,positions
+        ) VALUES(?,?,?,'regular','adult',2550,37.5,3)
+        """,
+        (business_id, _slug(title), title),
     )
     return business_id
 
@@ -1993,7 +2112,14 @@ def _move_household_to_shelter(
         """,
         (shelter[0], household_id, season_id, tick),
     )
-    connection.execute("UPDATE properties SET status='available' WHERE id=?", (occupancy["property_id"],))
+    connection.execute(
+        """
+        UPDATE properties SET status=CASE WHEN EXISTS(
+          SELECT 1 FROM property_occupancy WHERE property_id=? AND ended_season_id IS NULL
+        ) THEN 'occupied' ELSE 'available' END WHERE id=?
+        """,
+        (occupancy["property_id"], occupancy["property_id"]),
+    )
     connection.execute("UPDATE properties SET status='occupied' WHERE id=?", (shelter[0],))
     connection.execute(
         """

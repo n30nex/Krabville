@@ -1,4 +1,4 @@
-# Krabville KVsim v2
+# Krabville KVsim v2.1
 
 [![CI](https://github.com/n30nex/Krabville/actions/workflows/ci.yml/badge.svg)](https://github.com/n30nex/Krabville/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-5fd6df.svg)](LICENSE)
@@ -8,18 +8,27 @@ Krabville is a persistent, event-driven social simulation built for
 workplaces, schools, shops, and public spaces while their needs, families,
 finances, goals, memories, beliefs, and relationships shape what happens next.
 
+KVsim 2.1 expands everyday life with 518 useful goods, visible clothing and
+wardrobes, needs-driven shopping and item use, employer-funded wages, real
+service spending, moving business balances, shared apartments, and denser
+economy and population analytics. The expanded Lagoon has four complete
+exterior forms, so every building and outdoor district visibly changes from
+spring through winter without moving the roads residents follow.
+
 ![Krabville live town](docs/screenshots/v2-map-desktop.png)
 
 ## A Season At A Glance
 
-| Rule | KVsim v2 behavior |
+| Rule | KVsim v2.1 behavior |
 | --- | --- |
 | World clock | Five in-world minutes every 12.5 real seconds |
 | Season length | Seven in-world days over seven real hours |
 | Campaign | Start Season 1 once, then continue automatically through Season 20 |
 | Intermission | Ten real minutes between completed seasons |
 | Initial residents | Eight adults, one baby, two children, and one teen |
-| Population limits | 32 living residents, including at most 24 adults and seniors |
+| Population plan | Grow deterministically from 12 residents to 24 by the end of Season 20 |
+| Safety limits | 32 living residents, including at most 24 adults and seniors |
+| Seasonal chapters | Spring 1-5, summer 6-10, fall 11-15, winter 16-20 |
 | Season close | Chronicle, revealed random seed, statistics, and a local 1920x1080 poster |
 | Final stop | Season 20 completes, model work locks, and inference exits |
 
@@ -38,6 +47,9 @@ model lane is delayed or unavailable.
 - **Families and care:** households share homes, children require caregivers,
   parents can take leave, and households can pay for care. Traits and visual
   characteristics can pass to children.
+- **Housing and growth:** births and newcomers gradually grow the town to 24.
+  Detached homes, co-ops, and four shared apartment buildings keep separate
+  families housed without exceeding capacity.
 - **Lifecycle:** residents progress through baby, child, teen, adult, and senior
   stages. Adult life lasts four seasons and senior life lasts two. Minors are
   protected from mortality; rare non-graphic adult mortality can occur.
@@ -95,11 +107,12 @@ new model work, and the inference worker makes no calls after Season 20 locks.
 
 ## Public Interface
 
-The desktop and mobile UI provides a pannable and zoomable town, minimap,
-four-season animated weather and day/night lighting, 25 uniquely mapped live
-interiors with moving resident sprites, exterior place cards, RPG-style goods
-inventories with 388 searchable goods and semantic item minis, resident outfit
-and clothing views, dossiers, needs, predicted actions, families, property,
+The desktop and mobile UI provides a pannable and zoomable town, minimap, four
+full seasonal exterior maps, animated weather and day/night lighting, 41
+uniquely mapped live interiors with moving resident sprites, exterior place
+cards, 128 animated event-prop frames, and RPG-style inventories with 518
+searchable goods backed by 452 semantic item minis. It also includes resident
+outfits, dossiers, needs, predicted actions, families, housing capacity,
 finances, beliefs, relationship graphs, conversations, map-native voting,
 story ledgers, a comprehensive Analytics Lab, model usage, and season archives.
 
@@ -135,7 +148,7 @@ and private operational details are never serialized by the public API.
 
 ## API
 
-`/api/v3` is the KVsim v2 public contract:
+`/api/v3` is the KVsim v2.1 public contract:
 
 - `GET /api/v3/state`
 - `GET /api/v3/events`

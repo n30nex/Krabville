@@ -2,12 +2,18 @@ import Phaser from "phaser";
 
 import type { KrabvilleState, Point, PropertySummary, Resident } from "./types";
 
-const WORLD_WIDTH = 3072;
-const WORLD_HEIGHT = 2048;
+const WORLD_WIDTH = 4608;
+const WORLD_HEIGHT = 3072;
 const LEGACY_WORLD_WIDTH = 1774;
 const LEGACY_WORLD_HEIGHT = 887;
 const TICK_SECONDS = 12.5;
 const STEP_DISTANCE = 38;
+const SEASON_MAPS: Record<string, string> = {
+  spring: "/assets/kvsim-town-v21-spring.webp",
+  summer: "/assets/kvsim-town-v21-summer.webp",
+  fall: "/assets/kvsim-town-v21-fall.webp",
+  winter: "/assets/kvsim-town-v21-winter.webp",
+};
 
 const LEGACY_PRESSURE_NEEDS = new Set(["hunger", "social"]);
 const NEED_BADGES: Record<string, string> = {
@@ -28,51 +34,29 @@ const NEED_BADGES: Record<string, string> = {
 };
 
 const LOCATIONS: Record<string, Point> = {
-  "Town Square": [885, 430],
-  "Hobbs Cafe": [454, 451],
-  "Lagoon Library": [536, 653],
-  "Lagoon Clinic": [1105, 470],
-  "Harbour Shelter": [1165, 510],
-  "Radio Shack": [150, 386],
-  "Harbour Office": [850, 795],
-  Boatworks: [1455, 786],
-  "Weather Station": [362, 180],
-  "Post Office": [648, 462],
-  "Repair Workshop": [1588, 580],
-  Observatory: [362, 180],
-  "Garden Studio": [1328, 216],
-  "Ferry Dock": [850, 795],
-  "Willow House": [600, 250],
-  "Maple House": [806, 250],
-  "Lantern House": [1085, 260],
-  "Cedar House": [1580, 315],
-  "Glass House": [1328, 216],
-  "Post House": [648, 462],
-  "Rose House": [165, 600],
-  "Gear House": [536, 653],
-  "Birch House": [1370, 466],
-  "Pine House": [1290, 754],
-  "Lotus House": [1455, 786],
-  "Anchor House": [850, 795],
-  "Artists' house": [536, 653],
-  "Photo studio": [1328, 216],
-  "Painting studio": [600, 250],
-  "Animation lab": [806, 250],
-  "Theatre workshop": [1580, 315],
-  "Writing loft": [1085, 260],
-  "Harbour apartment": [850, 795],
-  "Radio engineering shack": [150, 386],
-  "Observatory cottage": [362, 180],
-  "Lagoon observatory": [362, 180],
-  "Garden apartment": [165, 600],
-  "Library and park": [536, 653],
-  "Oak Hill dorm": [806, 250],
-  "College library": [536, 653],
-  "College and training field": [820, 300],
-  "Lin family home": [1370, 466],
-  "Oak Hill College": [1105, 470],
-  "Moreno family home": [1580, 315],
-  "Willow Market": [454, 451],
+  "Town Square": [866, 372], "Hobbs Cafe": [653, 381], "Lagoon Library": [335, 381],
+  "Lagoon Clinic": [1109, 286], "Harbour Shelter": [1109, 286], "Radio Shack": [75, 173],
+  "Harbour Office": [809, 658], Boatworks: [1444, 650], "Weather Station": [670, 277],
+  "Post Office": [976, 377], "Repair Workshop": [1132, 468], Observatory: [670, 277],
+  "Garden Studio": [1698, 264], "Ferry Dock": [809, 658], "Willow House": [670, 208],
+  "Maple House": [924, 165], "Lantern House": [1294, 165], "Cedar House": [1444, 199],
+  "Glass House": [1698, 264], "Post House": [976, 377], "Rose House": [578, 528],
+  "Gear House": [335, 381], "Birch House": [1352, 338], "Pine House": [1571, 546],
+  "Lotus House": [1444, 650], "Anchor House": [809, 658], "Artists' house": [335, 381],
+  "Photo studio": [1698, 264], "Painting studio": [670, 208], "Animation lab": [924, 165],
+  "Theatre workshop": [1444, 199], "Writing loft": [1294, 165], "Harbour apartment": [809, 658],
+  "Radio engineering shack": [75, 173], "Observatory cottage": [670, 277],
+  "Lagoon observatory": [670, 277], "Garden apartment": [578, 528],
+  "Library and park": [335, 381], "Oak Hill dorm": [924, 165], "College library": [335, 381],
+  "College and training field": [924, 234], "Lin family home": [1352, 338],
+  "Oak Hill College": [1109, 286], "Moreno family home": [1444, 199], "Willow Market": [653, 381],
+  "Seagrass Apartments": [364, 61], "Harbourview Co-op": [1190, 368],
+  "Tideglass Towers": [1594, 212], "Cedar Quays Apartments": [1433, 576],
+  "Boardwalk Row": [1536, 585], "Spruce Court": [1328, 641], "Heron House": [462, 191],
+  "Lighthouse Row": [1328, 121], "Canal Childcare": [416, 95], "Tide Market": [1005, 372],
+  "Lagoon Bakery": [1409, 580], "Boardwalk Restaurant": [1363, 580], "Lagoon Cinema": [901, 468],
+  "Tide Theatre": [1005, 476], "Krabville Gym": [1617, 779], "Shoreline Arcade": [312, 459],
+  "Northstar Electronics": [323, 727], "Harbour Hardware": [1132, 468], "Seagrass Laundry": [1502, 693],
 };
 
 interface ResidentView {
@@ -108,6 +92,27 @@ function urgentNeedKeys(resident: Resident): string[] {
 
 function decisionKey(resident: Resident): string {
   return [resident.activity, resident.intention, resident.destinationX, resident.destinationY].join("|");
+}
+
+function stableHash(value: string): number {
+  let hash = 2166136261;
+  for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return hash >>> 0;
+}
+
+function eventPropGroup(prop: string): number {
+  const value = prop.toLowerCase();
+  const semantic: Array<[RegExp, number]> = [
+    [/baby|crib|bottle|child|nursery/, 17], [/arrival|move|visitor-bag|guest-bag/, 16],
+    [/supper|recipe|food|picnic|table/, 18], [/market|order|shop|sale|ticket/, 19],
+    [/bread|pastry|baking/, 20], [/concert|theatre|stage|dance/, 21],
+    [/game|sport|training|gym/, 22], [/arcade|controller/, 23],
+    [/phone|radio|signal/, 24], [/barter|exchange|swap/, 25],
+    [/business|contract|construction|project/, 26], [/memorial|death|funeral/, 27],
+    [/birthday|anniversary|aging/, 28], [/ferry|parcel|delivery|crate/, 29],
+    [/snow|winter|leaf|autumn|fall|cold/, 30], [/storm|repair|damage|outage|fire/, 31],
+  ];
+  return semantic.find(([pattern]) => pattern.test(value))?.[1] ?? stableHash(value) % 32;
 }
 
 function usesMapCoordinates(state: KrabvilleState): boolean {
@@ -184,7 +189,7 @@ class LagoonScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.image("lagoon-map", "/assets/kvsim-town-v2.webp");
+    this.load.image("lagoon-map-spring", SEASON_MAPS.spring);
     this.load.spritesheet("residents-a", "/assets/residents-a.png", {
       frameWidth: 192,
       frameHeight: 192,
@@ -197,9 +202,13 @@ class LagoonScene extends Phaser.Scene {
       frameWidth: 192,
       frameHeight: 192,
     });
-    this.load.spritesheet("interiors", "/assets/interiors-v3.png", {
+    this.load.spritesheet("interiors", "/assets/interiors-v4.png", {
       frameWidth: 256,
       frameHeight: 256,
+    });
+    this.load.spritesheet("event-props", "/assets/event-props-v21.png", {
+      frameWidth: 128,
+      frameHeight: 128,
     });
     this.load.spritesheet("weather-seasons", "/assets/weather-seasons-v1.png", {
       frameWidth: 128,
@@ -208,19 +217,20 @@ class LagoonScene extends Phaser.Scene {
   }
 
   create(): void {
-    const source = this.textures.get("lagoon-map").getSourceImage() as { width: number; height: number };
+    const source = this.textures.get("lagoon-map-spring").getSourceImage() as { width: number; height: number };
     if (source.width !== WORLD_WIDTH || source.height !== WORLD_HEIGHT) {
       throw new Error(`KVsim town map must be ${WORLD_WIDTH}x${WORLD_HEIGHT}, received ${source.width}x${source.height}`);
     }
     const worldElement = document.getElementById("world");
     if (worldElement) {
-      worldElement.dataset.mapAsset = "/assets/kvsim-town-v2.webp";
+      worldElement.dataset.mapAsset = SEASON_MAPS.spring;
       worldElement.dataset.worldWidth = String(WORLD_WIDTH);
       worldElement.dataset.worldHeight = String(WORLD_HEIGHT);
     }
-    this.map = this.add.image(0, 0, "lagoon-map").setOrigin(0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
-    this.textures.get("lagoon-map").setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.map = this.add.image(0, 0, "lagoon-map-spring").setOrigin(0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
+    this.textures.get("lagoon-map-spring").setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.textures.get("weather-seasons").setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.textures.get("event-props").setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.cameras.main.setRoundPixels(true);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.propLayer = this.add.container(0, 0).setDepth(70);
@@ -470,7 +480,7 @@ class LagoonScene extends Phaser.Scene {
     const buildings: PropertySummary[] = state.buildings?.length
       ? state.buildings.filter((building) => building.interiorAvailable || building.x !== undefined)
       : ["Hobbs Cafe", "Lagoon Library", "Lagoon Clinic", "Radio Shack", "Harbour Office"].map((name) => ({ name, interiorAvailable: true }));
-    for (const building of buildings.slice(0, 36)) {
+    for (const building of buildings.slice(0, 72)) {
       const point = building.x !== undefined && building.y !== undefined
         ? projectPoint([building.x, building.y], state)
         : this.locationPoint(building.name, state);
@@ -545,15 +555,14 @@ class LagoonScene extends Phaser.Scene {
     if (season === this.currentSeason) return;
     this.currentSeason = season;
     this.clearLayer(this.seasonLayer);
-    this.map.clearTint();
-    const settings: Record<string, { tint: number; frames: number[]; count: number; alpha: number }> = {
-      spring: { tint: 0xd8ffe2, frames: [53, 63], count: 38, alpha: 0.76 },
-      summer: { tint: 0xffffff, frames: [33, 34, 39], count: 18, alpha: 0.38 },
-      fall: { tint: 0xffd39a, frames: [16, 18, 20, 52, 58], count: 52, alpha: 0.78 },
-      winter: { tint: 0xdcecff, frames: [48, 49, 54, 59, 62], count: 58, alpha: 0.82 },
+    this.swapSeasonMap(season);
+    const settings: Record<string, { frames: number[]; count: number; alpha: number }> = {
+      spring: { frames: [53, 63], count: 38, alpha: 0.76 },
+      summer: { frames: [33, 34, 39], count: 18, alpha: 0.38 },
+      fall: { frames: [16, 18, 20, 52, 58], count: 52, alpha: 0.78 },
+      winter: { frames: [48, 49, 54, 59, 62], count: 58, alpha: 0.82 },
     };
     const setting = settings[season] ?? settings.summer!;
-    this.map.setTint(setting.tint);
     for (let index = 0; index < setting.count; index += 1) {
       const x = (113 + index * 619) % WORLD_WIDTH;
       const y = (71 + index * 353) % WORLD_HEIGHT;
@@ -567,9 +576,30 @@ class LagoonScene extends Phaser.Scene {
     if (worldElement) worldElement.dataset.season = season;
   }
 
+  private swapSeasonMap(season: string): void {
+    const normalized = SEASON_MAPS[season] ? season : "summer";
+    const key = `lagoon-map-${normalized}`;
+    const path = SEASON_MAPS[normalized]!;
+    const apply = () => {
+      this.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+      this.map.setTexture(key).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
+      const worldElement = document.getElementById("world");
+      if (worldElement) worldElement.dataset.mapAsset = path;
+    };
+    if (this.textures.exists(key)) {
+      apply();
+      return;
+    }
+    this.load.image(key, path);
+    this.load.once(Phaser.Loader.Events.COMPLETE, apply);
+    this.load.start();
+  }
+
   private updateWeather(weather: { condition?: string; season?: string }, seasonNumber: number): void {
     const condition = String(weather.condition ?? "clear").toLowerCase();
-    const season = String(weather.season ?? ["winter", "spring", "summer", "fall"][seasonNumber % 4] ?? "summer").toLowerCase();
+    const season = String(
+      weather.season ?? ["spring", "summer", "fall", "winter"][Math.min(3, Math.max(0, Math.floor((seasonNumber - 1) / 5)))] ?? "spring",
+    ).toLowerCase();
     this.updateSeason(season);
     const weatherKey = `${season}:${condition}`;
     if (weatherKey === this.currentWeather) return;
@@ -636,10 +666,22 @@ class LagoonScene extends Phaser.Scene {
     for (const prop of state.props) {
       const point = this.locationPoint(prop.location, state) ?? this.locationPoint("Town Square", state);
       if (!point) continue;
-      const marker = this.add.rectangle(0, 0, 13, 13, 0xffc857, 0.92).setRotation(Math.PI / 4);
-      marker.setStrokeStyle(2, 0x17323c, 1);
+      const group = eventPropGroup(prop.prop);
+      const atlasRow = Math.floor(group / 2);
+      const firstFrame = atlasRow * 8 + (group % 2) * 4;
+      const animationKey = `event-prop-${group}`;
+      if (!this.anims.exists(animationKey)) {
+        this.anims.create({
+          key: animationKey,
+          frames: this.anims.generateFrameNumbers("event-props", { start: firstFrame, end: firstFrame + 3 }),
+          frameRate: 3,
+          repeat: -1,
+        });
+      }
+      const marker = this.add.sprite(0, 0, "event-props", firstFrame).setScale(0.42);
+      if (!this.reducedMotion) marker.play(animationKey);
       const label = this.add
-        .text(0, -14, prop.prop.replaceAll("-", " "), {
+        .text(0, -31, prop.prop.replaceAll("-", " "), {
           fontFamily: "Inter, Segoe UI, sans-serif",
           fontSize: "11px",
           color: "#fff7d6",
@@ -649,9 +691,6 @@ class LagoonScene extends Phaser.Scene {
         .setOrigin(0.5, 1);
       const container = this.add.container(point[0] + 24, point[1], [marker, label]);
       this.propLayer.add(container);
-      if (!this.reducedMotion) {
-        this.tweens.add({ targets: marker, scale: 1.25, duration: 900, yoyo: true, repeat: -1 });
-      }
     }
   }
 

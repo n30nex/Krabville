@@ -18,15 +18,19 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   await expect(canvas).toBeVisible();
   await page.waitForTimeout(1_500);
   const world = page.locator("#world");
-  await expect(world).toHaveAttribute("data-map-asset", "/assets/kvsim-town-v2.webp");
-  await expect(world).toHaveAttribute("data-world-width", "3072");
-  await expect(world).toHaveAttribute("data-world-height", "2048");
+  await expect(world).toHaveAttribute("data-map-asset", "/assets/kvsim-town-v21-spring.webp");
+  await expect(world).toHaveAttribute("data-world-width", "4608");
+  await expect(world).toHaveAttribute("data-world-height", "3072");
   await expect(world).toHaveAttribute("data-paths-in-bounds", "true");
   await expect(world).toHaveAttribute("data-coordinate-space", /map|projected-legacy/);
   const loadedAssets = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
-  expect(loadedAssets.some((name) => name.endsWith("/assets/kvsim-town-v2.webp"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/kvsim-town-v21-spring.webp"))).toBe(true);
+  for (const season of ["summer", "fall", "winter"]) {
+    expect(loadedAssets.some((name) => name.endsWith(`/assets/kvsim-town-v21-${season}.webp`))).toBe(false);
+  }
   expect(loadedAssets.some((name) => name.endsWith("/assets/life-stages-v2.png"))).toBe(true);
-  expect(loadedAssets.some((name) => name.endsWith("/assets/interiors-v3.png"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/interiors-v4.png"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/event-props-v21.png"))).toBe(true);
   expect(loadedAssets.some((name) => name.endsWith("/assets/weather-seasons-v1.png"))).toBe(true);
 
   const initialZoom = Number(await world.getAttribute("data-camera-zoom"));
@@ -98,11 +102,20 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   await expect(page.locator("#explore-view")).toBeVisible();
   await expect(page.locator(".property-interior .interior-actor")).toHaveCount(occupiedProperty.inside.length);
   await expect(page.locator(".property-interior .interior-actor-sprite").first()).toBeVisible();
+  const actorPositions = await page.locator(".property-interior .interior-actor").evaluateAll((actors) => actors.map((actor) => {
+    const style = getComputedStyle(actor);
+    return [Number.parseFloat(style.getPropertyValue("--actor-left")), Number.parseFloat(style.getPropertyValue("--actor-top"))];
+  }));
+  for (let left = 0; left < actorPositions.length; left += 1) {
+    for (let right = left + 1; right < actorPositions.length; right += 1) {
+      expect(Math.hypot(actorPositions[left][0] - actorPositions[right][0], actorPositions[left][1] - actorPositions[right][1])).toBeGreaterThan(8);
+    }
+  }
   expect(await page.locator(".property-interior .interior-actor-sprite").first().evaluate((element) => getComputedStyle(element).backgroundImage)).toMatch(/residents|life-stages/);
   const firstItemIcon = page.locator("#explore-content .inventory-grid .item-icon").first();
   await page.locator("#explore-content").evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
   await expect(firstItemIcon).toBeVisible();
-  expect(await firstItemIcon.evaluate((element) => getComputedStyle(element).backgroundImage)).toContain("inventory-items-v1.png");
+  expect(await firstItemIcon.evaluate((element) => getComputedStyle(element).backgroundImage)).toContain("inventory-items-v2.png");
   await page.locator("#explore-close").click();
 
   await page.locator('[data-explore="analytics"]').click();

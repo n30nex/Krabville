@@ -38,9 +38,9 @@ from .db import (
     transaction,
 )
 from .runtime_v2 import (
-    add_next_generation,
     apply_lifecycle_boundary,
     bootstrap_population,
+    grow_population,
     initialize_v2_season_state,
     resident_finances,
     settle_daily_economy,
@@ -85,7 +85,11 @@ def current_season(connection: sqlite3.Connection) -> sqlite3.Row | None:
 
 def _weather(seed_hex: str, day: int, season_number: int = 1) -> dict[str, Any]:
     rng = _rng(seed_hex, "weather", season_number, day)
-    season_name = ("spring", "summer", "fall", "winter")[(season_number - 1) % 4]
+    # KVsim 2.1 tells one 20-season generational arc through four five-season
+    # climate chapters. Season 20 and later remain winter until a new arc starts.
+    season_name = ("spring", "summer", "fall", "winter")[
+        min(3, max(0, (season_number - 1) // 5))
+    ]
     choices = {
         "spring": (
             ("clear", 15, 10), ("cloudy", 12, 15), ("rain", 10, 19),
@@ -1550,10 +1554,10 @@ def _complete_season(
     shown_day = DAYS_PER_SEASON - 1 if natural else min(DAYS_PER_SEASON - 1, shown_tick // TICKS_PER_DAY)
     shown_minutes = 1435 if natural else (shown_tick % TICKS_PER_DAY) * 5
     lifecycle = []
-    births = []
+    growth: dict[str, Any] = {}
     if natural:
         lifecycle = apply_lifecycle_boundary(connection, int(season["id"]), shown_tick)
-        births = add_next_generation(
+        growth = grow_population(
             connection,
             int(season["id"]),
             shown_tick,
@@ -1580,7 +1584,12 @@ def _complete_season(
             "seed": season["seed_hex"],
             "reason": reason,
             "lifecycle": lifecycle,
-            "births": births,
+            "births": growth.get("births", []),
+            "arrivals": growth.get("arrivals", []),
+            "population": {
+                "living": growth.get("living"), "target": growth.get("target")
+            },
+            "guardianRepairs": growth.get("guardianRepairs", []),
         },
     )
 

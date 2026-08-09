@@ -1,30 +1,40 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "files": [
     {
-      "name": "interiors-v2.png",
-      "bytes": 1316784,
-      "sha256": "c9dfffa14d77e8676abf10821848675f9eb23c52b721a9b61eccb02ca0b0aacd"
+      "name": "event-props-v21.png",
+      "bytes": 2001329,
+      "sha256": "b6884bdb92cc69a5b9bdd2f60f4f509d7eaab81413ea91d0a75782f45562fc47"
     },
     {
-      "name": "interiors-v3.png",
-      "bytes": 2377742,
-      "sha256": "657dbb21b7dc406aadbcbff073ce3d57711bd1248909afedcd22001c8ba8e9ed"
+      "name": "interiors-v4.png",
+      "bytes": 4023550,
+      "sha256": "275084c4cbc7f8b82ce8872143d6b42ce0028a4469839363ced98dda9825eb2e"
     },
     {
-      "name": "inventory-items-v1.png",
-      "bytes": 817716,
-      "sha256": "70e270942288ff1b330709afbe311b51a7de4b29535ee01167a1f11f26ea6662"
+      "name": "inventory-items-v2.png",
+      "bytes": 2151063,
+      "sha256": "6ebc8ce09abb77605cb12c24c9ea169ce401d2e29c0558b080349a4c7953106d"
     },
     {
-      "name": "krabville-map.webp",
-      "bytes": 740792,
-      "sha256": "9fc7f67ba4b2a37e224831e2c4a5d0b66375575493c403735bbb8f3bda38bd6b"
+      "name": "kvsim-town-v21-fall.webp",
+      "bytes": 4654918,
+      "sha256": "aecdf5ce929fe9dd64c7bf55c1dc3ce07873a827fad5b45858ae4feab85aaca1"
     },
     {
-      "name": "kvsim-town-v2.webp",
-      "bytes": 1836176,
-      "sha256": "81df5eee659cea0b2cbbde84bee675acba9391445cbb31a647803e7ca55abc97"
+      "name": "kvsim-town-v21-spring.webp",
+      "bytes": 4709660,
+      "sha256": "4e4a70ed6186e068fcf561ee4fef3331260b6bfa47e23fc1c00f1c3027328acc"
+    },
+    {
+      "name": "kvsim-town-v21-summer.webp",
+      "bytes": 4192482,
+      "sha256": "27043980168fc3fb96aa5dd47f667836d9a4aeb4bf0c618c3a566cfc08481674"
+    },
+    {
+      "name": "kvsim-town-v21-winter.webp",
+      "bytes": 4787828,
+      "sha256": "cf2acdba0e20a0fab2abb603c4af18e42107cbb2587de7a9f0a7bb32d63796b1"
     },
     {
       "name": "life-stages-v2.png",
@@ -40,11 +50,6 @@
       "name": "residents-b.png",
       "bytes": 1004528,
       "sha256": "e2df4ed960837cef5c3af52fbd30cf69476d77e064867bbd14c9583b2aae192c"
-    },
-    {
-      "name": "season-001.png",
-      "bytes": 2321188,
-      "sha256": "259111ff2bccf20c4a46566dc6fe08c8d064dd4d0ee0c66bda6a1cff57205bab"
     },
     {
       "name": "weather-seasons-v1.png",

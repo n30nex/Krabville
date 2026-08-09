@@ -131,7 +131,7 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .interior-head span, .interior-head b { display: block; }
 .interior-head span { color: var(--cyan); font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .interior-head b { margin-top: 2px; font-size: 12px; }
-.interior-art { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; background-image: url('/assets/interiors-v3.png'); background-repeat: no-repeat; background-size: 500% 500%; background-position: var(--interior-x) var(--interior-y); image-rendering: pixelated; }
+.interior-art { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; background-image: url('/assets/interiors-v4.png'); background-repeat: no-repeat; background-size: 700% 600%; background-position: var(--interior-x) var(--interior-y); image-rendering: pixelated; }
 
 .interior-live-actors { position: absolute; z-index: 2; inset: 0; overflow: hidden; pointer-events: none; }
 .interior-actor { position: absolute; left: var(--actor-left); top: var(--actor-top); width: 68px; min-height: 74px; display: grid; justify-items: center; padding: 0; border: 0; background: transparent; color: #f4fbfc; cursor: pointer; pointer-events: auto; transform: translate(-50%,-50%); filter: drop-shadow(0 4px 3px rgba(0,0,0,.7)); }
@@ -271,7 +271,7 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .directory-meter i { height: 5px; overflow: hidden; border-radius: 3px; background: #223238; }
 .directory-meter i b { display: block; height: 100%; }
 .directory-meter em { text-align: right; font-style: normal; }
-.building-thumb { height: auto; aspect-ratio: 16 / 9; margin: -13px -13px 10px; border-bottom: 1px solid var(--line); background-image: linear-gradient(0deg, rgba(5,15,20,.2), transparent 48%), url('/assets/kvsim-town-v2.webp'); background-repeat: no-repeat; background-size: 640% auto; background-position: var(--building-x) var(--building-y); image-rendering: pixelated; }
+.building-thumb { height: auto; aspect-ratio: 16 / 9; margin: -13px -13px 10px; border-bottom: 1px solid var(--line); background-image: linear-gradient(0deg, rgba(5,15,20,.2), transparent 48%), var(--building-map, url('/assets/kvsim-town-v21-spring.webp')); background-repeat: no-repeat; background-size: 640% auto; background-position: center, var(--building-x) var(--building-y); image-rendering: pixelated; }
 .building-thumb.fallback { display: grid; place-items: center; background: rgba(18,48,56,.8); }
 .building-thumb.fallback svg { width: 34px; color: var(--cyan); }
 .card-totals { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1px; margin-top: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--line); }
@@ -287,7 +287,7 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .shop-metrics em { color: var(--amber); }
 .inventory-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(230px,1fr)); gap: 7px; padding: 0 12px 14px; }
 .inventory-grid article { min-width: 0; min-height: 52px; display: grid; grid-template-columns: 36px minmax(0,1fr) auto; align-items: center; gap: 9px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: rgba(15,35,42,.64); }
-.item-icon { width: 40px; height: 40px; display: block; border: 1px solid rgba(99,216,227,.24); border-radius: 6px; background-color: #17363e; background-image: url('/assets/inventory-items-v1.png'); background-repeat: no-repeat; background-size: 1400% 1400%; background-position: var(--item-x) var(--item-y); image-rendering: pixelated; box-shadow: inset 0 1px rgba(255,255,255,.08), 0 3px 9px rgba(0,0,0,.24); }
+.item-icon { width: 40px; height: 40px; display: block; border: 1px solid rgba(99,216,227,.24); border-radius: 6px; background-color: #17363e; background-image: url('/assets/inventory-items-v2.png'); background-repeat: no-repeat; background-size: 2400% 1900%; background-position: var(--item-x) var(--item-y); image-rendering: pixelated; box-shadow: inset 0 1px rgba(255,255,255,.08), 0 3px 9px rgba(0,0,0,.24); }
 .inventory-grid b, .inventory-grid small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inventory-grid b { font-size: 11px; }
 .inventory-grid small { margin-top: 3px; color: var(--muted); font-size: 9px; text-transform: capitalize; }
@@ -361,7 +361,7 @@ button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .building-detail-head button, .interior-open, .empty-state button { min-height: 40px; padding: 0 12px; border: 1px solid rgba(99,216,227,.34); border-radius: 6px; background: rgba(35,78,87,.72); color: #eafcff; cursor: pointer; font-size: 11px; font-weight: 750; }
 .building-detail-grid { display: grid; grid-template-columns: minmax(300px,.8fr) minmax(280px,1fr); gap: 12px; margin-bottom: 14px; }
 .building-detail-grid > * { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: rgba(13,31,37,.68); }
-.property-interior { position: relative; min-height: 350px; aspect-ratio: 1; overflow: hidden; background-image: url('/assets/interiors-v3.png'); background-repeat: no-repeat; background-size: 500% 500%; background-position: var(--interior-x) var(--interior-y); image-rendering: pixelated; }
+.property-interior { position: relative; min-height: 350px; aspect-ratio: 1; overflow: hidden; background-image: url('/assets/interiors-v4.png'); background-repeat: no-repeat; background-size: 700% 600%; background-position: var(--interior-x) var(--interior-y); image-rendering: pixelated; }
 .inside-list { display: grid; gap: 6px; padding: 0 10px 10px; }
 .inside-list button { min-height: 56px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 3px 10px; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: rgba(19,43,49,.72); color: inherit; text-align: left; cursor: pointer; }
 .inside-list button b { font-size: 12px; }

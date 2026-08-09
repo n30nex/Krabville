@@ -14,12 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import __version__
 from .commerce_v2 import item_asset_index
 from .config import Settings
 from .content import LOCATION_POINTS
 from .db import connect, dumps, initialize, loads, now_iso, transaction
 from .security import VoteSecurity, new_csrf
-from .runtime_v2 import account_balance
+from .runtime_v2 import account_balance, population_target_for_season
 
 
 class VoteRequest(BaseModel):
@@ -601,6 +602,10 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             )
         ]
         business = connection.execute("SELECT id,slug,name,status FROM businesses WHERE property_id=? ORDER BY id DESC LIMIT 1", (prop["id"],)).fetchone()
+        household_count = int(connection.execute(
+            "SELECT COUNT(*) FROM property_occupancy WHERE property_id=? AND ended_season_id IS NULL",
+            (prop["id"],),
+        ).fetchone()[0])
         if business:
             inventory_summary = connection.execute(
                 "SELECT COUNT(*),COALESCE(SUM(quantity),0) FROM business_inventory WHERE business_id=? AND quantity>0",
@@ -624,6 +629,8 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "condition": int(prop["condition_score"]),
             "interiorAvailable": bool(prop["interior_key"]),
             "interiorVariant": int(prop["interior_variant"]),
+            "capacity": int(prop["resident_capacity"]),
+            "householdCount": household_count,
             "inventoryItems": int(inventory_summary[0] or 0),
             "inventoryUnits": float(inventory_summary[1] or 0),
             "x": float(point[0]) if point else None, "y": float(point[1]) if point else None,
@@ -856,13 +863,74 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         """,
         (season_id,),
     ).fetchone()[0])
+    season_number = int(connection.execute("SELECT number FROM seasons WHERE id=?", (season_id,)).fetchone()[0])
+    stage_counts = {
+        str(row["current_stage"]): int(row["residents"])
+        for row in connection.execute(
+            "SELECT current_stage,COUNT(*) residents FROM resident_lifecycle WHERE alive=1 GROUP BY current_stage"
+        )
+    }
+    living_count = sum(stage_counts.values())
+    lifecycle_counts = {
+        str(row["event_type"]): int(row["events"])
+        for row in connection.execute(
+            "SELECT event_type,COUNT(*) events FROM life_events WHERE event_type IN ('birth','arrival','death') GROUP BY event_type"
+        )
+    }
+    arrivals = int(connection.execute(
+        """
+        SELECT COUNT(DISTINCT lep.resident_id) FROM life_event_participants lep
+        JOIN life_events le ON le.id=lep.life_event_id
+        WHERE le.event_type='arrival' AND lep.role='newcomer'
+        """
+    ).fetchone()[0])
+    housing = connection.execute(
+        """
+        SELECT
+          COALESCE(SUM(p.resident_capacity),0) capacity,
+          COALESCE(SUM(CASE WHEN p.property_type='apartment' THEN p.resident_capacity ELSE 0 END),0) apartment_capacity,
+          COUNT(*) properties,
+          SUM(CASE WHEN p.property_type='apartment' THEN 1 ELSE 0 END) apartments
+        FROM properties p
+        WHERE p.property_type IN ('house','apartment','shelter') AND p.status<>'demolished'
+        """
+    ).fetchone()
+    active_leases = int(connection.execute(
+        "SELECT COUNT(*) FROM property_occupancy WHERE ended_season_id IS NULL"
+    ).fetchone()[0])
+    apartment_residents = int(connection.execute(
+        """
+        SELECT COUNT(DISTINCT hm.resident_id) FROM property_occupancy po
+        JOIN properties p ON p.id=po.property_id AND p.property_type='apartment'
+        JOIN household_members hm ON hm.household_id=po.household_id AND hm.ended_season_id IS NULL
+        JOIN resident_lifecycle rl ON rl.resident_id=hm.resident_id AND rl.alive=1
+        WHERE po.ended_season_id IS NULL
+        """
+    ).fetchone()[0])
+    shared_buildings = int(connection.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT property_id FROM property_occupancy WHERE ended_season_id IS NULL
+          GROUP BY property_id HAVING COUNT(*)>1
+        )
+        """
+    ).fetchone()[0])
+    exterior_season = ("spring", "summer", "fall", "winter")[
+        min(3, max(0, (season_number - 1) // 5))
+    ]
+    map_assets = {
+        name: f"/assets/kvsim-town-v21-{name}.webp"
+        for name in ("spring", "summer", "fall", "winter")
+    }
     return {
         "world": {
-            "width": 3072, "height": 2048, "coordinateSpace": "legacy",
-            "mapAsset": "/assets/kvsim-town-v2.webp",
-            "interiorsAsset": "/assets/interiors-v3.png",
+            "width": 4608, "height": 3072, "coordinateSpace": "legacy",
+            "mapAsset": map_assets[exterior_season],
+            "mapAssets": map_assets,
+            "interiorsAsset": "/assets/interiors-v4.png",
             "weatherAsset": "/assets/weather-seasons-v1.png",
-            "inventoryAsset": "/assets/inventory-items-v1.png",
+            "inventoryAsset": "/assets/inventory-items-v2.png",
+            "eventAsset": "/assets/event-props-v21.png",
         },
         "ledger": ledger,
         "townEvents": ledger,
@@ -884,6 +952,26 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "inventoryByCategory": inventory_by_category,
             "movements": movement_summary,
             "prices": price_history,
+            "population": {
+                "living": living_count,
+                "target": population_target_for_season(season_number),
+                "stages": stage_counts,
+                "births": lifecycle_counts.get("birth", 0),
+                "arrivals": arrivals,
+                "deaths": lifecycle_counts.get("death", 0),
+                "activeHouseholds": len(households),
+            },
+            "housing": {
+                "residents": living_count,
+                "capacity": int(housing["capacity"] or 0),
+                "available": max(0, int(housing["capacity"] or 0) - living_count),
+                "properties": int(housing["properties"] or 0),
+                "activeLeases": active_leases,
+                "apartments": int(housing["apartments"] or 0),
+                "apartmentResidents": apartment_residents,
+                "apartmentCapacity": int(housing["apartment_capacity"] or 0),
+                "sharedBuildings": shared_buildings,
+            },
         },
         "economy": {
             "currency": "CAD", "totalCash": total_cash_cents / 100,
@@ -949,11 +1037,18 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
             "chronicles": [],
             "report": None,
             "world": {
-                "width": 3072,
-                "height": 2048,
+                "width": 4608,
+                "height": 3072,
                 "coordinateSpace": "legacy",
-                "mapAsset": "/assets/kvsim-town-v2.webp",
-                "interiorsAsset": "/assets/interiors-v3.png",
+                "mapAsset": "/assets/kvsim-town-v21-spring.webp",
+                "mapAssets": {
+                    name: f"/assets/kvsim-town-v21-{name}.webp"
+                    for name in ("spring", "summer", "fall", "winter")
+                },
+                "interiorsAsset": "/assets/interiors-v4.png",
+                "weatherAsset": "/assets/weather-seasons-v1.png",
+                "inventoryAsset": "/assets/inventory-items-v2.png",
+                "eventAsset": "/assets/event-props-v21.png",
             },
             "updatedAt": now_iso(),
         }
@@ -1137,7 +1232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         yield
 
-    app = FastAPI(title="Krabville Public API", version="2.0.3", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="Krabville Public API", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["krab.canadaverse.org", "127.0.0.1", "localhost", "testserver"],
@@ -1394,6 +1489,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "mapLocation": map_location, "status": prop["status"],
                 "condition": int(prop["condition_score"]), "value": int(prop["market_value_cents"]) / 100,
                 "interiorVariant": int(prop["interior_variant"]), "residents": residents,
+                "capacity": int(prop["resident_capacity"]),
+                "householdCount": len(households),
                 "households": households, "business": dict(business) if business else None,
                 "inventory": stock or home_stock, "transactions": transactions,
             }
