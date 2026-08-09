@@ -12,6 +12,13 @@ jobs:
   test:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
+    env:
+      KRABVILLE_ASSET_DIR: frontend/public/assets
+      KRABVILLE_DATA_DIR: /tmp/krabville-e2e
+      KRABVILLE_E2E_URL: http://127.0.0.1:18890
+      KRABVILLE_FRONTEND_DIR: frontend/dist
+      KRABVILLE_PORT: "18890"
+      KRABVILLE_PUBLIC_ORIGIN: http://127.0.0.1:18890
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -37,3 +44,44 @@ jobs:
         shell: bash
         run: |
           ! git grep -nI -Ei '(ctx7sk-|sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|password[[:space:]]*=[[:space:]]*[^$<{])' -- . ':!.github/workflows/ci.yml'
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Seed Playwright runtime
+        run: |
+          krabville-manage init
+          krabville-manage start
+          krabville-manage tick --count 49
+      - name: Run Playwright project matrix
+        shell: bash
+        run: |
+          set -o pipefail
+          krabville-api >"$RUNNER_TEMP/krabville-api.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error "$KRABVILLE_E2E_URL/healthz" >"$RUNNER_TEMP/krabville-health.json"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            cat "$RUNNER_TEMP/krabville-api.log"
+            exit 1
+          fi
+          cd frontend
+          npm run test:e2e 2>&1 | tee "$RUNNER_TEMP/playwright.log"
+      - name: Upload Playwright failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            frontend/test-results/
+            ${{ runner.temp }}/playwright.log
+            ${{ runner.temp }}/krabville-api.log
+            ${{ runner.temp }}/krabville-health.json
+          if-no-files-found: warn
+          retention-days: 14
