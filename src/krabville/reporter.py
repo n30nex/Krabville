@@ -7,7 +7,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import Settings
-from .db import dumps, now_iso
+from .db import dumps, loads, now_iso
 
 
 WIDTH = 1920
@@ -560,6 +560,133 @@ def _headline(season: sqlite3.Row, statistics: dict[str, Any], events: list[sqli
     if strange:
         return prefix + strange[0].strip().rstrip(".!?")
     return "Seven days of work, weather, choices, and unexpected company"
+
+
+def _recorded_weather(
+    connection: sqlite3.Connection,
+    season_id: int,
+    day: int,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    row = connection.execute(
+        """
+        SELECT state_json FROM snapshots
+        WHERE season_id=? AND tick>=? AND tick<?
+        ORDER BY tick LIMIT 1
+        """,
+        (season_id, day * 288, (day + 1) * 288),
+    ).fetchone()
+    state = loads(row["state_json"], {}) if row else {}
+    weather = state.get("weather") if isinstance(state, dict) else None
+    return weather if isinstance(weather, dict) else fallback
+
+
+def rebuild_verified_chronicles(
+    connection: sqlite3.Connection,
+    season_id: int,
+) -> dict[str, Any]:
+    season = connection.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
+    if not season or season["status"] != "complete":
+        raise RuntimeError("only completed seasons can be rebuilt")
+    fallback_weather = loads(season["weather_json"], {})
+    connection.execute("DELETE FROM daily_chronicles WHERE season_id=?", (season_id,))
+    rebuilt = []
+    for day in range(7):
+        start, end = day * 288, (day + 1) * 288
+        event = connection.execute(
+            """
+            SELECT title,summary FROM town_events
+            WHERE season_id=? AND day=? ORDER BY id DESC LIMIT 1
+            """,
+            (season_id, day),
+        ).fetchone()
+        ledger = list(
+            connection.execute(
+                """
+                SELECT id,headline,summary,significance,phase FROM story_ledger
+                WHERE season_id=? AND ((tick>=? AND tick<?) OR (day=? AND phase='epilogue'))
+                ORDER BY significance DESC,tick,id LIMIT 8
+                """,
+                (season_id, start, end, day),
+            )
+        )
+        activity_count = _scalar(
+            connection,
+            "SELECT COUNT(*) FROM activities WHERE season_id=? AND tick>=? AND tick<?",
+            (season_id, start, end),
+        )
+        conversation_count = _scalar(
+            connection,
+            "SELECT COUNT(*) FROM conversations WHERE season_id=? AND tick>=? AND tick<?",
+            (season_id, start, end),
+        )
+        transaction_count = _scalar(
+            connection,
+            """
+            SELECT COUNT(*) FROM financial_transactions
+            WHERE season_id=? AND tick>=? AND tick<? AND status='posted'
+            """,
+            (season_id, start, end),
+        )
+        weather = _recorded_weather(connection, season_id, day, fallback_weather)
+        facts = [str(row["summary"]).strip() for row in ledger if str(row["summary"]).strip()]
+        if not facts and event:
+            facts.append(str(event["summary"]).strip())
+        if not facts:
+            facts.append("Residents followed their recorded routines around the Lagoon.")
+        narrative = (
+            f"Krabville recorded {weather.get('condition', 'calm')} weather. "
+            + " ".join(facts[:5])
+            + f" The ledger closed with {activity_count} activity changes, "
+              f"{conversation_count} conversations, and {transaction_count} posted transactions."
+        )
+        title = f"Day {day + 1}: {event['title'] if event else (ledger[0]['headline'] if ledger else 'Around the Lagoon')}"
+        ledger_ids = [int(row["id"]) for row in ledger]
+        statistics = {
+            "activities": activity_count,
+            "conversations": conversation_count,
+            "transactions": transaction_count,
+            "ledgerEntries": len(ledger),
+            "weather": weather,
+        }
+        connection.execute(
+            """
+            INSERT INTO daily_chronicles(
+              season_id,day,title,narrative,statistics_json,created_at,
+              source,verified,ledger_ids_json
+            ) VALUES(?,?,?,?,?,?,'ledger_local',1,?)
+            """,
+            (season_id, day, title[:160], narrative[:1200], dumps(statistics), now_iso(), dumps(ledger_ids)),
+        )
+        rebuilt.append({"day": day, "ledgerIds": ledger_ids})
+    return {"seasonId": season_id, "chronicles": rebuilt}
+
+
+def verify_archive(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
+    rows = list(
+        connection.execute(
+            """
+            SELECT day,verified,source,ledger_ids_json FROM daily_chronicles
+            WHERE season_id=? ORDER BY day
+            """,
+            (season_id,),
+        )
+    )
+    invalid_ledger_ids: list[int] = []
+    for row in rows:
+        for ledger_id in loads(row["ledger_ids_json"], []):
+            if not connection.execute(
+                "SELECT 1 FROM story_ledger WHERE id=? AND season_id=?",
+                (ledger_id, season_id),
+            ).fetchone():
+                invalid_ledger_ids.append(int(ledger_id))
+    return {
+        "seasonId": season_id,
+        "days": len(rows),
+        "verified": len(rows) == 7 and all(bool(row["verified"]) for row in rows),
+        "sources": sorted({str(row["source"]) for row in rows}),
+        "invalidLedgerIds": invalid_ledger_ids,
+    }
 
 
 def generate_report(

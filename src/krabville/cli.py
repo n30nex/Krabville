@@ -8,8 +8,13 @@ from pathlib import Path
 from .config import Settings
 from .db import initialize
 from .inference import FakeProvider, process_one
+from .history_v214 import repair_v214
 from .legacy import import_week_one
-from .reporter import generate_report
+from .reporter import (
+    generate_report,
+    rebuild_verified_chronicles,
+    verify_archive,
+)
 from .world import advance_tick, diagnose, queue_conversation_if_needed, start_season
 
 
@@ -30,6 +35,8 @@ def _parser() -> argparse.ArgumentParser:
     legacy.add_argument("--poster", type=Path, required=True)
     report = sub.add_parser("report")
     report.add_argument("--season-id", type=int)
+    repair = sub.add_parser("repair-v214")
+    repair.add_argument("--seasons", type=int, nargs="*", default=[1, 2])
     return parser
 
 
@@ -93,6 +100,21 @@ def main() -> None:
                     raise SystemExit("no season")
                 season_id = int(row["id"])
             result = {"poster": str(generate_report(connection, season_id, settings))}
+            connection.commit()
+        elif args.command == "repair-v214":
+            result = {"repair": repair_v214(connection), "archives": []}
+            for number in sorted(set(args.seasons)):
+                row = connection.execute(
+                    "SELECT id,status FROM seasons WHERE number=?", (number,)
+                ).fetchone()
+                if not row or row["status"] != "complete":
+                    continue
+                season_id = int(row["id"])
+                rebuild_verified_chronicles(connection, season_id)
+                poster = generate_report(connection, season_id, settings)
+                result["archives"].append(
+                    {**verify_archive(connection, season_id), "poster": str(poster)}
+                )
             connection.commit()
         else:
             raise SystemExit(2)

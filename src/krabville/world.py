@@ -37,6 +37,7 @@ from .db import (
     retrieve_memories,
     transaction,
 )
+from .history_v214 import finalize_day_goals, finalize_season_goals, repair_childcare
 from .runtime_v2 import (
     apply_lifecycle_boundary,
     bootstrap_population,
@@ -142,18 +143,29 @@ def _choose_catalyst(
     return _rng(seed_hex, "catalyst", day).choice(candidates or list(MAJOR_EVENTS))
 
 
-def _participant_slugs(connection: sqlite3.Connection, seed_hex: str, day: int) -> list[str]:
-    slugs = [
-        str(row[0])
+def _participant_slugs(
+    connection: sqlite3.Connection,
+    seed_hex: str,
+    day: int,
+    event_slug: str,
+) -> list[str]:
+    residents = [
+        row
         for row in connection.execute(
             """
-            SELECT r.slug FROM residents r
+            SELECT r.slug,l.current_stage FROM residents r
             JOIN resident_lifecycle l ON l.resident_id=r.id
             WHERE l.alive=1 ORDER BY r.id
             """
         )
     ]
-    return _rng(seed_hex, "participants", day).sample(slugs, min(2, len(slugs)))
+    if event_slug in {"old-flame", "unexpected-proposal"}:
+        adults = [str(row["slug"]) for row in residents if row["current_stage"] in {"adult", "senior"}]
+        teens = [str(row["slug"]) for row in residents if row["current_stage"] == "teen"]
+        eligible = adults if len(adults) >= 2 else teens
+    else:
+        eligible = [str(row["slug"]) for row in residents]
+    return _rng(seed_hex, "participants", day, event_slug).sample(eligible, min(2, len(eligible)))
 
 
 def _queue_job(
@@ -191,7 +203,7 @@ def _day_event(
     catalyst_slug: str | None,
 ) -> EventTemplate:
     event = _choose_catalyst(connection, season["seed_hex"], day, catalyst_slug)
-    participants = _participant_slugs(connection, season["seed_hex"], day)
+    participants = _participant_slugs(connection, season["seed_hex"], day, event.slug)
     cursor = connection.execute(
         """
         INSERT INTO town_events(
@@ -293,6 +305,7 @@ def start_season(
         initialize_resident_state(connection, season_id, prior_season_id)
         initialize_v2_season_state(connection, season_id, prior_season_id, seed_hex)
         seed_commerce(connection)
+        repair_childcare(connection, season_id, 0)
         season = connection.execute("SELECT * FROM seasons WHERE id=?", (season_id,)).fetchone()
         event = _day_event(connection, season, 0, opening_slug)
         for resident in connection.execute(
@@ -1175,9 +1188,10 @@ def _close_poll(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -
     top_votes = int(options[0]["votes"]) if options else 0
     tied = [option for option in options if int(option["votes"]) == top_votes]
     winner = _rng(season["seed_hex"], "poll-winner", day).choice(tied or options)
+    selection_source = "visitor" if top_votes > 0 else "town"
     connection.execute(
-        "UPDATE polls SET status='closed',winner_option_id=? WHERE id=?",
-        (winner["id"], poll["id"]),
+        "UPDATE polls SET status='closed',winner_option_id=?,selection_source=? WHERE id=?",
+        (winner["id"], selection_source, poll["id"]),
     )
     connection.execute(
         "UPDATE seasons SET next_catalyst_slug=? WHERE id=?",
@@ -1188,7 +1202,13 @@ def _close_poll(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -
         season["id"],
         day * TICKS_PER_DAY + POLL_CLOSE_TICK,
         "poll",
-        {"status": "closed", "pollId": poll["id"], "winner": winner["choice_id"], "title": winner["title"]},
+        {
+            "status": "closed",
+            "pollId": poll["id"],
+            "winner": winner["choice_id"],
+            "title": winner["title"],
+            "selectionSource": selection_source,
+        },
     )
 
 
@@ -1248,7 +1268,7 @@ def _schedule_daily_jobs(connection: sqlite3.Connection, season: sqlite3.Row, da
             tick,
             "chronicle",
             1,
-            {"day": day, "activities": _day_activity_count(connection, season["id"], day)},
+            _chronicle_context(connection, season, day),
         )
     if day_tick == 144:
         start = day * TICKS_PER_DAY
@@ -1292,6 +1312,121 @@ def _day_activity_count(connection: sqlite3.Connection, season_id: int, day: int
             (season_id, start, end),
         ).fetchone()[0]
     )
+
+
+def _chronicle_context(
+    connection: sqlite3.Connection,
+    season: sqlite3.Row,
+    day: int,
+) -> dict[str, Any]:
+    start = day * TICKS_PER_DAY
+    end = start + TICKS_PER_DAY
+    event = connection.execute(
+        """
+        SELECT id,slug,title,category,summary FROM town_events
+        WHERE season_id=? AND day=? ORDER BY id DESC LIMIT 1
+        """,
+        (season["id"], day),
+    ).fetchone()
+    residents = [
+        {"slug": str(row["slug"]), "name": str(row["name"])}
+        for row in connection.execute(
+            """
+            SELECT r.slug,r.name FROM residents r
+            JOIN resident_season_state state ON state.resident_id=r.id
+            WHERE state.season_id=? ORDER BY r.id
+            """,
+            (season["id"],),
+        )
+    ]
+    ledger = []
+    for row in connection.execute(
+        """
+        SELECT id,tick,entry_type,headline,summary,significance,phase
+        FROM story_ledger
+        WHERE season_id=? AND ((tick>=? AND tick<?) OR (day=? AND phase='epilogue'))
+        ORDER BY significance DESC,tick,id LIMIT 16
+        """,
+        (season["id"], start, end, day),
+    ):
+        participants = [
+            str(item[0])
+            for item in connection.execute(
+                """
+                SELECT resident.slug FROM story_ledger_participants participant
+                JOIN residents resident ON resident.id=participant.resident_id
+                WHERE participant.ledger_id=? ORDER BY resident.slug
+                """,
+                (row["id"],),
+            )
+        ]
+        ledger.append(
+            {
+                "id": int(row["id"]),
+                "tick": int(row["tick"]),
+                "type": str(row["entry_type"]),
+                "headline": str(row["headline"]),
+                "summary": str(row["summary"]),
+                "significance": int(row["significance"]),
+                "phase": str(row["phase"]),
+                "residents": participants,
+            }
+        )
+    conversations = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM conversations WHERE season_id=? AND tick>=? AND tick<?",
+            (season["id"], start, end),
+        ).fetchone()[0]
+    )
+    relationship_changes = [
+        {
+            "a": str(row["a"]),
+            "b": str(row["b"]),
+            "affinity": int(row["affinity"]),
+            "trust": int(row["trust"]),
+            "tension": int(row["tension"]),
+            "resentment": int(row["resentment"]),
+        }
+        for row in connection.execute(
+            """
+            SELECT a.slug a,b.slug b,relationship.affinity,relationship.trust,
+                   relationship.tension,relationship.resentment
+            FROM relationships relationship
+            JOIN residents a ON a.id=relationship.resident_a
+            JOIN residents b ON b.id=relationship.resident_b
+            WHERE relationship.season_id=? AND relationship.last_interaction_tick>=?
+              AND relationship.last_interaction_tick<?
+            ORDER BY relationship.interactions DESC LIMIT 8
+            """,
+            (season["id"], start, end),
+        )
+    ]
+    economy = connection.execute(
+        """
+        SELECT COUNT(*) transactions,
+               COALESCE(SUM(ABS(entry.amount_cents)),0)/2 volume_cents
+        FROM financial_transactions transaction_record
+        LEFT JOIN transaction_entries entry ON entry.transaction_id=transaction_record.id
+        WHERE transaction_record.season_id=? AND transaction_record.tick>=?
+          AND transaction_record.tick<? AND transaction_record.status='posted'
+        """,
+        (season["id"], start, end),
+    ).fetchone()
+    return {
+        "day": day,
+        "weather": loads(season["weather_json"], {}),
+        "catalyst": dict(event) if event else None,
+        "residentAllowlist": residents,
+        "ledger": ledger,
+        "relationshipChanges": relationship_changes,
+        "verifiedStatistics": {
+            "activities": _day_activity_count(connection, int(season["id"]), day),
+            "conversations": conversations,
+            "ledgerEntries": len(ledger),
+            "transactions": int(economy["transactions"] or 0),
+            "economicVolumeCents": int(economy["volume_cents"] or 0),
+        },
+    }
 
 
 def _micro_event(connection: sqlite3.Connection, season: sqlite3.Row, day: int, tick: int) -> None:
@@ -1452,51 +1587,37 @@ def _local_chronicle(connection: sqlite3.Connection, season: sqlite3.Row, day: i
         "SELECT 1 FROM daily_chronicles WHERE season_id=? AND day=?", (season["id"], day)
     ).fetchone():
         return
-    event = connection.execute(
-        "SELECT * FROM town_events WHERE season_id=? AND day=? ORDER BY id DESC LIMIT 1",
-        (season["id"], day),
-    ).fetchone()
-    activity_count = _day_activity_count(connection, season["id"], day)
-    conversation_count = int(
-        connection.execute(
-            "SELECT COUNT(*) FROM conversations WHERE season_id=? AND tick>=? AND tick<?",
-            (season["id"], day * TICKS_PER_DAY, (day + 1) * TICKS_PER_DAY),
-        ).fetchone()[0]
-    )
-    weather = loads(season["weather_json"], {})
+    context = _chronicle_context(connection, season, day)
+    event = context["catalyst"]
+    statistics = context["verifiedStatistics"]
+    ledger = context["ledger"]
+    weather = context["weather"]
     title = f"Day {day + 1}: {event['title'] if event else 'A quiet Lagoon day'}"
+    facts = [str(item["summary"]).strip() for item in ledger[:5] if str(item["summary"]).strip()]
+    if not facts and event:
+        facts.append(str(event["summary"]).strip())
+    if not facts:
+        facts.append("Residents followed their recorded routines around the Lagoon.")
     narrative = (
-        f"Krabville woke to {weather.get('condition', 'calm')} weather. "
-        f"{event['summary'] if event else 'Residents followed their routines around the Lagoon.'} "
-        f"The town recorded {activity_count} meaningful activity changes and "
-        f"{conversation_count} conversations before nightfall."
+        f"Krabville recorded {weather.get('condition', 'calm')} weather. "
+        + " ".join(facts)
+        + f" The ledger closed with {statistics['activities']} activity changes and "
+          f"{statistics['conversations']} conversations."
     )
     connection.execute(
         """
-        INSERT INTO daily_chronicles(season_id,day,title,narrative,statistics_json,created_at)
-        VALUES(?,?,?,?,?,?)
+        INSERT INTO daily_chronicles(
+          season_id,day,title,narrative,statistics_json,created_at,source,verified,ledger_ids_json
+        ) VALUES(?,?,?,?,?,?,'ledger_local',1,?)
         """,
         (
             season["id"],
             day,
             title,
             narrative,
-            dumps({"activities": activity_count, "conversations": conversation_count}),
+            dumps(statistics),
             now_iso(),
-        ),
-    )
-    connection.execute(
-        """
-        UPDATE goals SET status=CASE WHEN progress>=10 THEN 'complete' ELSE 'deferred' END,
-          completed_tick=CASE WHEN progress>=10 THEN ? ELSE completed_tick END
-        WHERE season_id=? AND scope='daily' AND created_tick>=? AND created_tick<?
-          AND status='active'
-        """,
-        (
-            (day + 1) * TICKS_PER_DAY - 1,
-            season["id"],
-            day * TICKS_PER_DAY,
-            (day + 1) * TICKS_PER_DAY,
+            dumps([int(item["id"]) for item in ledger]),
         ),
     )
     emit(connection, season["id"], (day + 1) * TICKS_PER_DAY - 1, "chronicle", {"day": day, "title": title})
@@ -1510,6 +1631,7 @@ def _new_day(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -> N
         (day, dumps(weather), season["id"]),
     )
     refreshed = connection.execute("SELECT * FROM seasons WHERE id=?", (season["id"],)).fetchone()
+    repair_childcare(connection, int(season["id"]), day * TICKS_PER_DAY)
     event = _day_event(connection, refreshed, day, catalyst)
     for resident in connection.execute(
         """
@@ -1551,7 +1673,9 @@ def _complete_season(
     )
     last_day = min(DAYS_PER_SEASON - 1, max(0, (max(1, final_tick) - 1) // TICKS_PER_DAY))
     for day in range(last_day + 1):
+        finalize_day_goals(connection, int(season["id"]), day)
         _local_chronicle(connection, season, day)
+    finalize_season_goals(connection, int(season["id"]))
     completed = now_iso()
     natural = final_tick >= TARGET_TICKS
     shown_tick = TARGET_TICKS if natural else max(0, final_tick)
@@ -1674,6 +1798,7 @@ def advance_tick(connection: sqlite3.Connection) -> dict[str, Any]:
             (next_tick, day, day_tick * 5, season["id"]),
         )
         if next_tick % TICKS_PER_DAY == 0:
+            finalize_day_goals(connection, int(season["id"]), day)
             _local_chronicle(connection, season, day)
             if day + 1 >= DAYS_PER_SEASON or (
                 season["stop_after_day"] is not None and day + 1 >= int(season["stop_after_day"])
@@ -1781,16 +1906,48 @@ def _apply_completed_jobs(connection: sqlite3.Connection, season: sqlite3.Row) -
                 emit(connection, season["id"], job["tick"], "conversation", {"residents": slugs, "summary": summary, "dialogue": dialogue})
         elif kind == "chronicle":
             day = int(job["day"])
+            context = loads(job["context_json"], {})
             title = str(result.get("title", f"Day {day + 1}"))[:160]
-            narrative = str(result.get("narrative", ""))[:1200]
+            allowed_ledger = {
+                int(item["id"]): item
+                for item in context.get("ledger", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), int)
+            }
+            selected_ids = [
+                int(value)
+                for value in result.get("ledgerIds", [])
+                if isinstance(value, int) and value in allowed_ledger
+            ]
+            if not selected_ids:
+                selected_ids = list(allowed_ledger)[:5]
+            facts = [str(allowed_ledger[value].get("summary", "")).strip() for value in selected_ids]
+            facts = [fact for fact in facts if fact]
+            catalyst = context.get("catalyst") if isinstance(context.get("catalyst"), dict) else None
+            if not facts and catalyst:
+                facts.append(str(catalyst.get("summary", "")).strip())
+            statistics = context.get("verifiedStatistics", {})
+            narrative = " ".join(facts) or "Residents followed their recorded routines around the Lagoon."
+            narrative += (
+                f" The ledger closed with {int(statistics.get('activities', 0))} activity changes and "
+                f"{int(statistics.get('conversations', 0))} conversations."
+            )
             if narrative:
                 connection.execute(
                     """
-                    INSERT INTO daily_chronicles(season_id,day,title,narrative,statistics_json,created_at)
-                    VALUES(?,?,?,?,?,?)
-                    ON CONFLICT(season_id,day) DO UPDATE SET title=excluded.title,narrative=excluded.narrative
+                    INSERT INTO daily_chronicles(
+                      season_id,day,title,narrative,statistics_json,created_at,
+                      source,verified,ledger_ids_json
+                    ) VALUES(?,?,?,?,?,?,'model_verified',1,?)
+                    ON CONFLICT(season_id,day) DO UPDATE SET
+                      title=excluded.title,narrative=excluded.narrative,
+                      statistics_json=excluded.statistics_json,created_at=excluded.created_at,
+                      source=excluded.source,verified=excluded.verified,
+                      ledger_ids_json=excluded.ledger_ids_json
                     """,
-                    (season["id"], day, title, narrative, dumps(result.get("statistics", {})), now_iso()),
+                    (
+                        season["id"], day, title, narrative, dumps(statistics),
+                        now_iso(), dumps(selected_ids),
+                    ),
                 )
         connection.execute(
             "UPDATE model_jobs SET error_code='applied',updated_at=? WHERE id=?",

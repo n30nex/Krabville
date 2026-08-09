@@ -54,20 +54,37 @@ def _assert_no_tool_events(path: Path) -> None:
             raise RuntimeError("provider attempted disallowed tool activity")
 
 
-def _validate(kind: str, value: Any) -> dict[str, Any]:
+def _validate(
+    kind: str,
+    value: Any,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    context = context or {}
     if not isinstance(value, dict):
         raise ValueError("provider result must be an object")
     if kind in {"resident_intent", "resident_reflection"}:
         items = value.get("items")
         if not isinstance(items, list) or not 1 <= len(items) <= 4:
             raise ValueError("resident batch requires one to four items")
+        allowed_slugs = {
+            str(resident.get("slug"))
+            for resident in context.get("residents", [])
+            if isinstance(resident, dict) and resident.get("slug")
+        }
         clean = []
+        seen: set[str] = set()
         for item in items:
             if not isinstance(item, dict) or not item.get("slug"):
                 continue
+            slug = str(item["slug"])
+            if allowed_slugs and slug not in allowed_slugs:
+                raise ValueError("resident batch referenced an unknown resident")
+            if slug in seen:
+                raise ValueError("resident batch repeated a resident")
+            seen.add(slug)
             clean.append(
                 {
-                    "slug": _public(item["slug"], 80),
+                    "slug": _public(slug, 80),
                     "intention": _public(item.get("intention", ""), 240),
                     "reflection": _public(item.get("reflection", ""), 360),
                     "publicThought": _public(item.get("publicThought", ""), 280),
@@ -80,14 +97,39 @@ def _validate(kind: str, value: Any) -> dict[str, Any]:
         dialogue = value.get("dialogue")
         if not isinstance(dialogue, list) or not 2 <= len(dialogue) <= 8:
             raise ValueError("conversation requires two to eight lines")
+        allowed_speakers = {str(name) for name in context.get("names", [])}
         clean_lines = []
         for line in dialogue:
             if isinstance(line, dict) and line.get("speaker") and line.get("text"):
+                if allowed_speakers and str(line["speaker"]) not in allowed_speakers:
+                    raise ValueError("conversation used an invalid speaker")
                 clean_lines.append({"speaker": _public(line["speaker"], 80), "text": _public(line["text"], 320)})
         if len(clean_lines) < 2:
             raise ValueError("conversation contained too few valid lines")
         return {"dialogue": clean_lines, "summary": _public(value.get("summary", ""), 320)}
     if kind == "chronicle":
+        allowed_ledger_ids = {
+            int(item["id"])
+            for item in context.get("ledger", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), int)
+        }
+        allowed_slugs = {
+            str(item["slug"])
+            for item in context.get("residentAllowlist", [])
+            if isinstance(item, dict) and item.get("slug")
+        }
+        ledger_ids = value.get("ledgerIds")
+        resident_slugs = value.get("residentSlugs")
+        if not isinstance(ledger_ids, list) or any(
+            not isinstance(item, int) or item not in allowed_ledger_ids for item in ledger_ids
+        ):
+            raise ValueError("chronicle referenced an unknown ledger entry")
+        if not isinstance(resident_slugs, list) or any(
+            not isinstance(item, str) or item not in allowed_slugs for item in resident_slugs
+        ):
+            raise ValueError("chronicle referenced an unknown resident")
+        if len(set(ledger_ids)) != len(ledger_ids) or len(set(resident_slugs)) != len(resident_slugs):
+            raise ValueError("chronicle references must be unique")
         statistics = {
             str(key)[:40]: number
             for key, number in value.get("statistics", {}).items()
@@ -99,6 +141,8 @@ def _validate(kind: str, value: Any) -> dict[str, Any]:
             "title": _public(value.get("title", "A day around the Lagoon"), 160),
             "narrative": _public(value.get("narrative", "Krabville carried on."), 1200),
             "statistics": statistics,
+            "ledgerIds": ledger_ids,
+            "residentSlugs": resident_slugs,
         }
     if kind in {"season_opener", "daily_director"}:
         return {
@@ -137,17 +181,27 @@ class FakeProvider:
             }
         elif kind == "chronicle":
             day = int(context.get("day", 0)) + 1
+            ledger_ids = [int(item["id"]) for item in context.get("ledger", [])[:5]]
+            resident_slugs = sorted(
+                {
+                    str(slug)
+                    for item in context.get("ledger", [])[:5]
+                    for slug in item.get("residents", [])
+                }
+            )
             result = {
                 "title": f"Day {day}: Small choices around the Lagoon",
                 "narrative": "Residents balanced their routines with the day's catalyst, and several quiet choices changed how neighbours understood one another.",
                 "statistics": {"activities": int(context.get("activities", 0))},
+                "ledgerIds": ledger_ids,
+                "residentSlugs": resident_slugs,
             }
         else:
             result = {
                 "headline": "The Lagoon opens another chapter",
                 "publicNote": "A familiar morning is beginning to bend around an unfamiliar event.",
             }
-        return _validate(kind, result), {
+        return _validate(kind, result, context), {
             "input_tokens": 240,
             "cached_input_tokens": 0,
             "output_tokens": 90,
@@ -175,7 +229,8 @@ class CodexProvider:
             "concise and grounded only in this context. Use a TV-14 tone with realistic "
             "disagreements, jealousy, rivalry, romance, mistakes, and consequences. Never "
             "include explicit sexual content, sexual violence, graphic violence, hate content, "
-            "or sexualized minors. Context:\n" + serialized
+            "or sexualized minors. For chronicles, use only supplied resident slugs and ledger "
+            "IDs; unsupported names, speakers, facts, and statistics are invalid. Context:\n" + serialized
         )
 
     def _locked(self, season_id: int) -> bool:
@@ -259,7 +314,7 @@ class CodexProvider:
                         "reasoning_tokens": int(raw.get("reasoning_output_tokens", 0)),
                         "total_tokens": int(raw.get("input_tokens", 0)) + int(raw.get("output_tokens", 0)),
                     }
-            return _validate(str(job["kind"]), value), usage
+            return _validate(str(job["kind"]), value, loads(job["context_json"], {})), usage
 
 
 def _lease_job(connection: sqlite3.Connection) -> sqlite3.Row | None:
@@ -338,17 +393,29 @@ def _reserve_attempt(
         return int(cursor.lastrowid)
 
 
-def _finish_usage(connection: sqlite3.Connection, usage_id: int, status: str, usage: dict[str, int] | None = None) -> None:
+def _finish_usage(
+    connection: sqlite3.Connection,
+    usage_id: int,
+    status: str,
+    usage: dict[str, int] | None = None,
+    *,
+    error_class: str | None = None,
+    duration_ms: int | None = None,
+) -> None:
     if usage is None:
         connection.execute(
-            "UPDATE model_usage SET status=?,completed_at=? WHERE id=?",
-            (status, now_iso(), usage_id),
+            """
+            UPDATE model_usage SET status=?,error_class=?,duration_ms=?,completed_at=?
+            WHERE id=?
+            """,
+            (status, error_class, duration_ms, now_iso(), usage_id),
         )
         return
     connection.execute(
         """
         UPDATE model_usage SET status=?,input_tokens=?,cached_input_tokens=?,
-          output_tokens=?,reasoning_tokens=?,total_tokens=?,completed_at=? WHERE id=?
+          output_tokens=?,reasoning_tokens=?,total_tokens=?,error_class=NULL,
+          duration_ms=?,completed_at=? WHERE id=?
         """,
         (
             status,
@@ -357,8 +424,73 @@ def _finish_usage(connection: sqlite3.Connection, usage_id: int, status: str, us
             int(usage.get("output_tokens", 0)),
             int(usage.get("reasoning_tokens", 0)),
             int(usage.get("total_tokens", 0)),
+            duration_ms,
             now_iso(),
             usage_id,
+        ),
+    )
+
+
+def _error_class(error: Exception) -> str:
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, ProviderProcessError):
+        return "provider_process"
+    if isinstance(error, SeasonLocked):
+        return "season_locked"
+    if isinstance(error, (ValueError, json.JSONDecodeError)):
+        return "schema_validation"
+    if isinstance(error, RuntimeError) and "tool" in str(error).lower():
+        return "tool_violation"
+    return "provider_error"
+
+
+def _circuit_open(
+    connection: sqlite3.Connection,
+    job: sqlite3.Row,
+    model: str,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT status FROM model_circuits
+        WHERE season_id=? AND day=? AND job_kind=? AND model=?
+        """,
+        (job["season_id"], job["day"], job["kind"], model),
+    ).fetchone()
+    return bool(row and row["status"] == "open")
+
+
+def _record_circuit_result(
+    connection: sqlite3.Connection,
+    job: sqlite3.Row,
+    model: str,
+    *,
+    failed: bool,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT consecutive_failures FROM model_circuits
+        WHERE season_id=? AND day=? AND job_kind=? AND model=?
+        """,
+        (job["season_id"], job["day"], job["kind"], model),
+    ).fetchone()
+    failures = int(row["consecutive_failures"]) if row else 0
+    failures = failures + 1 if failed else 0
+    status = "open" if failures >= 2 else "closed"
+    connection.execute(
+        """
+        INSERT INTO model_circuits(
+          season_id,day,job_kind,model,status,consecutive_failures,opened_at,updated_at
+        ) VALUES(?,?,?,?,?,?,?,?)
+        ON CONFLICT(season_id,day,job_kind,model) DO UPDATE SET
+          status=excluded.status,consecutive_failures=excluded.consecutive_failures,
+          opened_at=CASE WHEN excluded.status='open'
+            THEN COALESCE(model_circuits.opened_at,excluded.opened_at) ELSE NULL END,
+          updated_at=excluded.updated_at
+        """,
+        (
+            job["season_id"], job["day"], job["kind"], model, status, failures,
+            now_iso() if status == "open" else None, now_iso(),
         ),
     )
 
@@ -378,7 +510,10 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
         ).fetchone()[0]
     )
     used_attempts = max(int(job["attempts"]), recorded_attempts)
-    attempts = all_attempts[min(used_attempts, len(all_attempts)):]
+    if used_attempts == 0 and _circuit_open(connection, job, settings.primary_model):
+        attempts = (all_attempts[1],)
+    else:
+        attempts = all_attempts[min(used_attempts, len(all_attempts)):]
     last_error = "provider_failed"
     for model, reasoning in attempts:
         try:
@@ -396,13 +531,27 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
         except SeasonLocked:
             last_error = "season_locked"
             break
+        started = time.monotonic()
         try:
             result, usage = provider.complete(job, model, reasoning)
         except Exception as error:
-            _finish_usage(connection, usage_id, "failed")
-            last_error = type(error).__name__[:80]
+            duration_ms = max(0, round((time.monotonic() - started) * 1000))
+            error_class = _error_class(error)
+            _finish_usage(
+                connection,
+                usage_id,
+                "failed",
+                error_class=error_class,
+                duration_ms=duration_ms,
+            )
+            if model == settings.primary_model:
+                _record_circuit_result(connection, job, model, failed=True)
+            last_error = error_class
             continue
-        _finish_usage(connection, usage_id, "complete", usage)
+        duration_ms = max(0, round((time.monotonic() - started) * 1000))
+        _finish_usage(connection, usage_id, "complete", usage, duration_ms=duration_ms)
+        if model == settings.primary_model:
+            _record_circuit_result(connection, job, model, failed=False)
         connection.execute(
             """
             UPDATE model_jobs SET status='complete',result_json=?,lease_until=NULL,

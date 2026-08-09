@@ -34,6 +34,18 @@ class AlwaysFailProvider:
         raise RuntimeError("simulated interrupted request")
 
 
+class PrimaryFailProvider:
+    def __init__(self, primary: str):
+        self.primary = primary
+        self.calls = []
+
+    def complete(self, job, model, reasoning):
+        self.calls.append(model)
+        if model == self.primary:
+            raise ValueError("synthetic schema mismatch")
+        return FakeProvider().complete(job, model, reasoning)
+
+
 def test_codex_prompt_uses_the_tv14_story_boundary(settings_factory) -> None:
     settings = settings_factory()
     prompt = CodexProvider(settings, settings.database_path)._prompt(
@@ -208,3 +220,63 @@ def test_provider_tool_events_fail_closed(tmp_path: Path) -> None:
 def test_provider_rejects_operational_text(unsafe: str) -> None:
     with pytest.raises(ValueError, match="operational data"):
         _validate("season_opener", {"headline": "A safe title", "publicNote": unsafe})
+
+
+def test_chronicle_references_must_match_the_authoritative_context() -> None:
+    context = {
+        "ledger": [{"id": 41, "residents": ["hana-sato"]}],
+        "residentAllowlist": [{"slug": "hana-sato", "name": "Hana Sato"}],
+    }
+    valid = {
+        "title": "A factual day",
+        "narrative": "Hana reviewed the recorded event.",
+        "ledgerIds": [41],
+        "residentSlugs": ["hana-sato"],
+    }
+    assert _validate("chronicle", valid, context)["ledgerIds"] == [41]
+    with pytest.raises(ValueError, match="unknown ledger"):
+        _validate("chronicle", {**valid, "ledgerIds": [99]}, context)
+    with pytest.raises(ValueError, match="unknown resident"):
+        _validate("chronicle", {**valid, "residentSlugs": ["mara"]}, context)
+
+
+def test_two_primary_schema_failures_open_a_same_day_kind_circuit(settings_factory) -> None:
+    settings = settings_factory()
+    connection = initialize(settings)
+    season_id = start_season(connection, seed_hex="67" * 32)["seasonId"]
+    _queue_job(connection, season_id, 0, 1, "season_opener", 0, {"fixture": 2})
+    _queue_job(connection, season_id, 0, 2, "season_opener", 0, {"fixture": 3})
+    provider = PrimaryFailProvider(settings.primary_model)
+
+    assert process_one(connection, settings, provider)
+    assert process_one(connection, settings, provider)
+    assert process_one(connection, settings, provider)
+
+    assert provider.calls == [
+        settings.primary_model,
+        settings.fallback_model,
+        settings.primary_model,
+        settings.fallback_model,
+        settings.fallback_model,
+    ]
+    circuit = connection.execute(
+        """
+        SELECT status,consecutive_failures FROM model_circuits
+        WHERE season_id=? AND day=0 AND job_kind='season_opener' AND model=?
+        """,
+        (season_id, settings.primary_model),
+    ).fetchone()
+    assert tuple(circuit) == ("open", 2)
+    failures = list(
+        connection.execute(
+            """
+            SELECT error_class,duration_ms FROM model_usage
+            WHERE season_id=? AND model=? AND status='failed'
+            """,
+            (season_id, settings.primary_model),
+        )
+    )
+    assert len(failures) == 2
+    assert all(row["error_class"] == "schema_validation" for row in failures)
+    assert all(int(row["duration_ms"]) >= 0 for row in failures)
+    connection.close()
