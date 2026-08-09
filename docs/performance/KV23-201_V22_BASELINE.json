@@ -1,0 +1,489 @@
+{
+  "browser": {
+    "browser": "Chromium 151.0.7922.34",
+    "durationSeconds": 600,
+    "errors": {
+      "console": [],
+      "page": [],
+      "requests": []
+    },
+    "initialResources": [
+      {
+        "decodedBodySize": 81346,
+        "durationMs": 39.4,
+        "encodedBodySize": 81346,
+        "initiatorType": "script",
+        "path": "/assets/index-BrOxtw7H.js",
+        "transferSize": 81646
+      },
+      {
+        "decodedBodySize": 49890,
+        "durationMs": 39.8,
+        "encodedBodySize": 49890,
+        "initiatorType": "link",
+        "path": "/assets/index-DUZ5mcOZ.css",
+        "transferSize": 50190
+      },
+      {
+        "decodedBodySize": 160255,
+        "durationMs": 56.4,
+        "encodedBodySize": 160255,
+        "initiatorType": "fetch",
+        "path": "/api/v3/state",
+        "transferSize": 160555
+      },
+      {
+        "decodedBodySize": 1217728,
+        "durationMs": 56.1,
+        "encodedBodySize": 1217728,
+        "initiatorType": "script",
+        "path": "/assets/game-TvrhCoNv.js",
+        "transferSize": 1218028
+      },
+      {
+        "decodedBodySize": 4709660,
+        "durationMs": 1016.4,
+        "encodedBodySize": 4709660,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/kvsim-town-v21-spring.webp",
+        "transferSize": 4709960
+      },
+      {
+        "decodedBodySize": 902356,
+        "durationMs": 853.7,
+        "encodedBodySize": 902356,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/residents-a.png",
+        "transferSize": 902656
+      },
+      {
+        "decodedBodySize": 1004528,
+        "durationMs": 873.6,
+        "encodedBodySize": 1004528,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/residents-b.png",
+        "transferSize": 1004828
+      },
+      {
+        "decodedBodySize": 415188,
+        "durationMs": 590.3,
+        "encodedBodySize": 415188,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/life-stages-v2.png",
+        "transferSize": 415488
+      },
+      {
+        "decodedBodySize": 4023550,
+        "durationMs": 1029.2,
+        "encodedBodySize": 4023550,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/interiors-v4.png",
+        "transferSize": 4023850
+      },
+      {
+        "decodedBodySize": 554145,
+        "durationMs": 897.2,
+        "encodedBodySize": 554145,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/weather-seasons-v1.png",
+        "transferSize": 554445
+      },
+      {
+        "decodedBodySize": 2001329,
+        "durationMs": 991.7,
+        "encodedBodySize": 2001329,
+        "initiatorType": "xmlhttprequest",
+        "path": "/assets/event-props-v21.png",
+        "transferSize": 2001629
+      },
+      {
+        "decodedBodySize": 160255,
+        "durationMs": 83.8,
+        "encodedBodySize": 160255,
+        "initiatorType": "fetch",
+        "path": "/api/v3/state",
+        "transferSize": 160555
+      }
+    ],
+    "jsonParse": {
+      "checksum": 480,
+      "milliseconds": {
+        "max": 1.5,
+        "median": 0.4,
+        "min": 0.3,
+        "p95": 1.2
+      },
+      "samples": 40,
+      "sourceBytes": 160255
+    },
+    "memory": {
+      "delta": {
+        "Documents": 0,
+        "Frames": 0,
+        "JSHeapTotalSize": 19050496,
+        "JSHeapUsedSize": 1181284,
+        "LayoutCount": 121,
+        "LayoutDuration": 0.11675,
+        "Nodes": 0,
+        "RecalcStyleCount": 30413,
+        "RecalcStyleDuration": 11.64291,
+        "ScriptDuration": 211.310004,
+        "TaskDuration": 300.800454,
+        "domDocuments": 0,
+        "domEventListeners": 0,
+        "domNodes": 0
+      },
+      "final": {
+        "Documents": 1,
+        "Frames": 1,
+        "JSHeapTotalSize": 36814848,
+        "JSHeapUsedSize": 11593988,
+        "LayoutCount": 129,
+        "LayoutDuration": 0.18063,
+        "Nodes": 564,
+        "RecalcStyleCount": 30787,
+        "RecalcStyleDuration": 11.831096,
+        "ScriptDuration": 214.641367,
+        "TaskDuration": 306.520433,
+        "domDocuments": 1,
+        "domEventListeners": 185,
+        "domNodes": 564
+      },
+      "initial": {
+        "Documents": 1,
+        "Frames": 1,
+        "JSHeapTotalSize": 17764352,
+        "JSHeapUsedSize": 10412704,
+        "LayoutCount": 8,
+        "LayoutDuration": 0.06388,
+        "Nodes": 564,
+        "RecalcStyleCount": 374,
+        "RecalcStyleDuration": 0.188186,
+        "ScriptDuration": 3.331363,
+        "TaskDuration": 5.719979,
+        "domDocuments": 1,
+        "domEventListeners": 185,
+        "domNodes": 564
+      }
+    },
+    "refresh": {
+      "intervalMs": {
+        "max": 5590.396,
+        "median": 4996.961,
+        "min": 4412.48,
+        "p95": 5182.397
+      },
+      "observationSeconds": 610.931,
+      "observedIntervals": 122,
+      "requestsPerMinute": 11.982,
+      "soakStateRequests": 120,
+      "stateRequests": 123
+    },
+    "sse": {
+      "connections": 1,
+      "eventNames": {
+        "activity": 12,
+        "decision": 12,
+        "model_job": 1,
+        "poll": 1,
+        "relationship_change": 1,
+        "season": 1,
+        "tick": 3,
+        "town_event": 1
+      },
+      "messages": 32,
+      "reconnects": 0
+    },
+    "timing": {
+      "canvas": {
+        "clientHeight": 704,
+        "clientWidth": 1176,
+        "height": 704,
+        "renderer": "2d",
+        "width": 1176
+      },
+      "mapInteractiveMs": 5562.482,
+      "navigation": {
+        "decodedBodySize": 524,
+        "domContentLoadedMs": 158.9,
+        "encodedBodySize": 524,
+        "loadEventMs": 160.7,
+        "paints": {
+          "first-contentful-paint": 240,
+          "first-paint": 152
+        },
+        "responseEndMs": 99.4,
+        "transferSize": 824
+      },
+      "screenshotBytes": 1643120,
+      "shellReadyMs": 375.835
+    },
+    "viewport": {
+      "height": 768,
+      "width": 1366
+    }
+  },
+  "environment": {
+    "machine": "AMD64",
+    "node": "v22.18.0",
+    "platform": "win32",
+    "python": "3.13.6"
+  },
+  "fixture": {
+    "fixtureSchema": 13,
+    "migratedSchema": 14,
+    "release": "2.2.1",
+    "releaseCommit": "f630a9502b029097deeecbbc85b0f74aca4e99f9",
+    "season": 1,
+    "sha256": "9749386cb96381fb6581fec222db5b222fa18e2af5007779bdc31eb6afc566a5",
+    "tick": 44
+  },
+  "frontendBuild": {
+    "fileCount": 16,
+    "files": [
+      {
+        "gzipBytes": 1996836,
+        "path": "/assets/event-props-v21.png",
+        "rawBytes": 2001329,
+        "sha256": "b6884bdb92cc69a5b9bdd2f60f4f509d7eaab81413ea91d0a75782f45562fc47"
+      },
+      {
+        "gzipBytes": 321734,
+        "path": "/assets/game-TvrhCoNv.js",
+        "rawBytes": 1217728,
+        "sha256": "c664d2f1579a6f3b08b7f5fab04d5313cd52503dde64745483cfeba921a23009"
+      },
+      {
+        "gzipBytes": 25035,
+        "path": "/assets/index-BrOxtw7H.js",
+        "rawBytes": 81346,
+        "sha256": "837196040129f1eb9b5b689ef8d30e1d5751c0aea46b39d2a3ff1dadc3aa8865"
+      },
+      {
+        "gzipBytes": 10008,
+        "path": "/assets/index-DUZ5mcOZ.css",
+        "rawBytes": 49890,
+        "sha256": "cd8662490d4c901b24eeda998f0ae0dc31a79679d1c2b4cda75b283894b39c73"
+      },
+      {
+        "gzipBytes": 4020118,
+        "path": "/assets/interiors-v4.png",
+        "rawBytes": 4023550,
+        "sha256": "275084c4cbc7f8b82ce8872143d6b42ce0028a4469839363ced98dda9825eb2e"
+      },
+      {
+        "gzipBytes": 2149439,
+        "path": "/assets/inventory-items-v2.png",
+        "rawBytes": 2151063,
+        "sha256": "6ebc8ce09abb77605cb12c24c9ea169ce401d2e29c0558b080349a4c7953106d"
+      },
+      {
+        "gzipBytes": 4656356,
+        "path": "/assets/kvsim-town-v21-fall.webp",
+        "rawBytes": 4654918,
+        "sha256": "aecdf5ce929fe9dd64c7bf55c1dc3ce07873a827fad5b45858ae4feab85aaca1"
+      },
+      {
+        "gzipBytes": 4711118,
+        "path": "/assets/kvsim-town-v21-spring.webp",
+        "rawBytes": 4709660,
+        "sha256": "4e4a70ed6186e068fcf561ee4fef3331260b6bfa47e23fc1c00f1c3027328acc"
+      },
+      {
+        "gzipBytes": 4193780,
+        "path": "/assets/kvsim-town-v21-summer.webp",
+        "rawBytes": 4192482,
+        "sha256": "27043980168fc3fb96aa5dd47f667836d9a4aeb4bf0c618c3a566cfc08481674"
+      },
+      {
+        "gzipBytes": 4789311,
+        "path": "/assets/kvsim-town-v21-winter.webp",
+        "rawBytes": 4787828,
+        "sha256": "cf2acdba0e20a0fab2abb603c4af18e42107cbb2587de7a9f0a7bb32d63796b1"
+      },
+      {
+        "gzipBytes": 413351,
+        "path": "/assets/life-stages-v2.png",
+        "rawBytes": 415188,
+        "sha256": "c42701fd3098194eb191a2f37f68273348f9a64e036b8f3efd88b1a701c2830d"
+      },
+      {
+        "gzipBytes": 735,
+        "path": "/assets/manifest.json",
+        "rawBytes": 1786,
+        "sha256": "e50729c3eace12a9b8dc4af39119ba6b3024d7f5ee880e39e189c4edf842ca51"
+      },
+      {
+        "gzipBytes": 900710,
+        "path": "/assets/residents-a.png",
+        "rawBytes": 902356,
+        "sha256": "00b7424ee4b738134f7af8c0e2301142af233674cf63df2f51e894d7f09cb08b"
+      },
+      {
+        "gzipBytes": 1003306,
+        "path": "/assets/residents-b.png",
+        "rawBytes": 1004528,
+        "sha256": "e2df4ed960837cef5c3af52fbd30cf69476d77e064867bbd14c9583b2aae192c"
+      },
+      {
+        "gzipBytes": 548582,
+        "path": "/assets/weather-seasons-v1.png",
+        "rawBytes": 554145,
+        "sha256": "303e3bcaf2a23723b673009437cfd73727eeb2adcb876d1a23009ae9b0b6f88e"
+      },
+      {
+        "gzipBytes": 319,
+        "path": "/index.html",
+        "rawBytes": 524,
+        "sha256": "9bab9569ec2a31e59077a269484508497d92a547afae35585f21e6d03d670754"
+      }
+    ],
+    "gzipBytes": 29740738,
+    "rawBytes": 30748321
+  },
+  "generatedAt": "2026-08-09T19:36:04+00:00",
+  "initialTransfer": {
+    "fileCount": 11,
+    "files": [
+      {
+        "gzipBytes": 1996836,
+        "path": "/assets/event-props-v21.png",
+        "rawBytes": 2001329,
+        "sha256": "b6884bdb92cc69a5b9bdd2f60f4f509d7eaab81413ea91d0a75782f45562fc47"
+      },
+      {
+        "gzipBytes": 321734,
+        "path": "/assets/game-TvrhCoNv.js",
+        "rawBytes": 1217728,
+        "sha256": "c664d2f1579a6f3b08b7f5fab04d5313cd52503dde64745483cfeba921a23009"
+      },
+      {
+        "gzipBytes": 25035,
+        "path": "/assets/index-BrOxtw7H.js",
+        "rawBytes": 81346,
+        "sha256": "837196040129f1eb9b5b689ef8d30e1d5751c0aea46b39d2a3ff1dadc3aa8865"
+      },
+      {
+        "gzipBytes": 10008,
+        "path": "/assets/index-DUZ5mcOZ.css",
+        "rawBytes": 49890,
+        "sha256": "cd8662490d4c901b24eeda998f0ae0dc31a79679d1c2b4cda75b283894b39c73"
+      },
+      {
+        "gzipBytes": 4020118,
+        "path": "/assets/interiors-v4.png",
+        "rawBytes": 4023550,
+        "sha256": "275084c4cbc7f8b82ce8872143d6b42ce0028a4469839363ced98dda9825eb2e"
+      },
+      {
+        "gzipBytes": 4711118,
+        "path": "/assets/kvsim-town-v21-spring.webp",
+        "rawBytes": 4709660,
+        "sha256": "4e4a70ed6186e068fcf561ee4fef3331260b6bfa47e23fc1c00f1c3027328acc"
+      },
+      {
+        "gzipBytes": 413351,
+        "path": "/assets/life-stages-v2.png",
+        "rawBytes": 415188,
+        "sha256": "c42701fd3098194eb191a2f37f68273348f9a64e036b8f3efd88b1a701c2830d"
+      },
+      {
+        "gzipBytes": 900710,
+        "path": "/assets/residents-a.png",
+        "rawBytes": 902356,
+        "sha256": "00b7424ee4b738134f7af8c0e2301142af233674cf63df2f51e894d7f09cb08b"
+      },
+      {
+        "gzipBytes": 1003306,
+        "path": "/assets/residents-b.png",
+        "rawBytes": 1004528,
+        "sha256": "e2df4ed960837cef5c3af52fbd30cf69476d77e064867bbd14c9583b2aae192c"
+      },
+      {
+        "gzipBytes": 548582,
+        "path": "/assets/weather-seasons-v1.png",
+        "rawBytes": 554145,
+        "sha256": "303e3bcaf2a23723b673009437cfd73727eeb2adcb876d1a23009ae9b0b6f88e"
+      },
+      {
+        "gzipBytes": 319,
+        "path": "/index.html",
+        "rawBytes": 524,
+        "sha256": "9bab9569ec2a31e59077a269484508497d92a547afae35585f21e6d03d670754"
+      }
+    ],
+    "gzipBytes": 13951117,
+    "missingPaths": [],
+    "rawBytes": 14960244
+  },
+  "protocol": {
+    "browserSoakSeconds": 600,
+    "budgetsEnforced": false,
+    "stateSamples": 7,
+    "stateWarmups": 2,
+    "viewport": {
+      "height": 768,
+      "width": 1366
+    }
+  },
+  "schemaVersion": 1,
+  "sourceCommit": "d1243a53dc234eef606d2bf7c1a5fcdac5bba6ee",
+  "state": {
+    "databaseMs": {
+      "max": 50.235,
+      "median": 33.209,
+      "min": 23.621,
+      "p95": 50.235
+    },
+    "gzipBytes": {
+      "max": 14736.0,
+      "median": 14736.0,
+      "min": 14736.0,
+      "p95": 14736.0
+    },
+    "gzipRatio": 0.092,
+    "payloadShape": {
+      "accounts": 67,
+      "events": 32,
+      "properties": 45,
+      "residents": 12
+    },
+    "queryCount": {
+      "max": 796.0,
+      "median": 796.0,
+      "min": 796.0,
+      "p95": 796.0
+    },
+    "queryOperations": {
+      "PRAGMA": 31,
+      "SELECT": 765
+    },
+    "rawBytes": {
+      "max": 160255.0,
+      "median": 160255.0,
+      "min": 160255.0,
+      "p95": 160255.0
+    },
+    "routeRoundTripMs": {
+      "max": 222.755,
+      "median": 60.785,
+      "min": 41.187,
+      "p95": 222.755
+    },
+    "samples": 7,
+    "serializationMs": {
+      "max": 2.935,
+      "median": 2.236,
+      "min": 1.811,
+      "p95": 2.935
+    },
+    "stateBuildMs": {
+      "max": 61.227,
+      "median": 43.792,
+      "min": 30.038,
+      "p95": 61.227
+    },
+    "warmups": 2
+  },
+  "ticket": "KV23-201"
+}
