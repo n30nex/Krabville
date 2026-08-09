@@ -29,6 +29,7 @@ from .db import (
     required_schema_version,
     transaction,
 )
+from .public_events import PUBLIC_EVENT_KINDS, serialize_public_event
 from .security import VoteSecurity, new_csrf
 from .runtime_v2 import account_balance, population_target_for_season
 from .world import _season_chapter, _weather, diagnose
@@ -38,17 +39,6 @@ class VoteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     choiceId: str = Field(min_length=1, max_length=8, pattern=r"^[A-Z0-9_-]+$")
     csrfToken: str = Field(min_length=20, max_length=128)
-
-
-PUBLIC_READ_EVENT_KINDS = (
-    "goal_change",
-    "purchase",
-    "health",
-    "care_handoff",
-    "housing",
-    "relationship_change",
-    "verified_chronicle",
-)
 
 
 def _public_label(value: Any, default: str = "Not available") -> str:
@@ -1772,7 +1762,7 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
                 "models": {},
             },
             "events": [],
-            "eventKinds": list(PUBLIC_READ_EVENT_KINDS),
+            "eventKinds": list(PUBLIC_EVENT_KINDS),
             "conversations": [],
             "goals": [],
             "lifeGoals": [],
@@ -1836,13 +1826,7 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
     ):
         residents.append(_resident_base_v2(connection, season_id, row, indoor_locations))
     recent = [
-        {
-            "seq": int(row["seq"]),
-            "tick": int(row["tick"]),
-            "type": row["event_type"],
-            "payload": loads(row["payload_json"], {}),
-            "createdAt": row["created_at"],
-        }
+        serialize_public_event(row)
         for row in connection.execute(
             "SELECT * FROM event_stream WHERE season_id=? ORDER BY seq DESC LIMIT 60", (season_id,)
         )
@@ -1976,7 +1960,7 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
         "poll": _poll_payload(connection, season_id),
         "usage": _usage(connection, season_id, settings),
         "events": recent,
-        "eventKinds": list(PUBLIC_READ_EVENT_KINDS),
+        "eventKinds": list(PUBLIC_EVENT_KINDS),
         "conversations": conversations,
         "goals": goals,
         "lifeGoals": life_goals,
@@ -2197,18 +2181,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             season = _season(connection)
             if not season:
-                return {"events": [], "next": after, "eventKinds": list(PUBLIC_READ_EVENT_KINDS)}
+                return {"events": [], "next": after, "eventKinds": list(PUBLIC_EVENT_KINDS)}
             rows = list(
                 connection.execute(
                     "SELECT * FROM event_stream WHERE season_id=? AND seq>? ORDER BY seq LIMIT ?",
                     (season["id"], after, limit),
                 )
             )
-            items = [{"seq": int(row["seq"]), "tick": int(row["tick"]), "type": row["event_type"], "payload": loads(row["payload_json"], {}), "createdAt": row["created_at"]} for row in rows]
+            items = [serialize_public_event(row) for row in rows]
             return {
                 "events": items,
                 "next": items[-1]["seq"] if items else after,
-                "eventKinds": list(PUBLIC_READ_EVENT_KINDS),
+                "eventKinds": list(PUBLIC_EVENT_KINDS),
             }
         finally:
             connection.close()
@@ -2235,7 +2219,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if rows:
                     for row in rows:
                         cursor = int(row["seq"])
-                        data = json.dumps({"tick": int(row["tick"]), "payload": loads(row["payload_json"], {}), "createdAt": row["created_at"]}, separators=(",", ":"))
+                        data = json.dumps(serialize_public_event(row), separators=(",", ":"))
                         yield f"id: {cursor}\nevent: {row['event_type']}\ndata: {data}\n\n"
                 else:
                     yield ": heartbeat\n\n"
