@@ -65,6 +65,16 @@ only while all three services are stopped.
 - A model-degraded state does not stop deterministic simulation time.
 - A completed or operator-paused season should not be treated as a crash.
 
+## Authoritative tick incidents
+
+An exception inside one deterministic tick rolls its transaction back and is
+retried at the same tick. Krabville stores only the component, exception class,
+attempt count, and timestamps; exception text is not retained. A successful
+retry resolves the incident automatically. Three failures at the same tick
+pause the season without advancing world time, make `/healthz` degraded, and
+surface the incident through `diagnose --json` and `/metrics`. Correct the
+fault, then use the existing `resume` control operation to retry that tick.
+
 ## Storage and logs
 
 Container logs rotate at 5 MB with two files per service. Runtime databases,

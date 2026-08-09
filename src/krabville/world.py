@@ -2357,6 +2357,14 @@ def _complete_season(
         _local_chronicle(connection, season, day)
     finalize_season_goals(connection, int(season["id"]))
     completed = now_iso()
+    connection.execute(
+        """
+        UPDATE runtime_incidents
+        SET status='resolved',resolved_at=COALESCE(resolved_at,?),last_at=?
+        WHERE season_id=? AND status='open'
+        """,
+        (completed, completed, season["id"]),
+    )
     natural = final_tick >= TARGET_TICKS
     shown_tick = TARGET_TICKS if natural else max(0, final_tick)
     shown_day = DAYS_PER_SEASON - 1 if natural else min(DAYS_PER_SEASON - 1, shown_tick // TICKS_PER_DAY)
@@ -2855,6 +2863,31 @@ def diagnose(
         "oldestQueuedAt": oldest_queued,
         "oldestQueuedAgeSeconds": _age_seconds(oldest_queued, now),
     }
+    incidents = (
+        list(
+            connection.execute(
+                """
+                SELECT id,tick,component,incident_key,error_class,status,attempts,
+                       first_at,last_at,resolved_at
+                FROM runtime_incidents WHERE season_id=?
+                ORDER BY id DESC LIMIT 8
+                """,
+                (season["id"],),
+            )
+        )
+        if season
+        else []
+    )
+    open_incidents = (
+        int(
+            connection.execute(
+                "SELECT COUNT(*) FROM runtime_incidents WHERE season_id=? AND status='open'",
+                (season["id"],),
+            ).fetchone()[0]
+        )
+        if season
+        else 0
+    )
     season_status = (
         {
             "id": int(season["id"]),
@@ -2872,7 +2905,7 @@ def diagnose(
         if season
         else None
     )
-    ok = quick == "ok" and not tick_stale and stale_leases == 0
+    ok = quick == "ok" and not tick_stale and stale_leases == 0 and open_incidents == 0
     return {
         "ok": ok,
         "status": "healthy" if ok else "failed" if quick != "ok" else "degraded",
@@ -2896,6 +2929,24 @@ def diagnose(
                 ),
             },
             "queue": queue,
+            "incidents": {
+                "open": open_incidents,
+                "recent": [
+                    {
+                        "id": int(row["id"]),
+                        "tick": int(row["tick"]),
+                        "component": row["component"],
+                        "key": row["incident_key"],
+                        "errorClass": row["error_class"],
+                        "status": row["status"],
+                        "attempts": int(row["attempts"]),
+                        "firstAt": row["first_at"],
+                        "lastAt": row["last_at"],
+                        "resolvedAt": row["resolved_at"],
+                    }
+                    for row in incidents
+                ],
+            },
         },
         "residents": int(
             connection.execute("SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1").fetchone()[0]
