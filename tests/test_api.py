@@ -131,6 +131,27 @@ def test_untrusted_host_is_rejected(settings_factory) -> None:
         assert client.get("/healthz").status_code == 400
 
 
+def test_health_and_metrics_expose_runtime_freshness(settings_factory) -> None:
+    settings = settings_factory(tick_stale_seconds=1)
+    connection = initialize(settings)
+    season_id = start_season(connection, seed_hex="74" * 32)["seasonId"]
+    connection.execute(
+        "UPDATE seasons SET started_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+        (season_id,),
+    )
+    connection.close()
+    with TestClient(create_app(settings), base_url="http://testserver") as client:
+        assert client.get("/livez").status_code == 200
+        assert client.get("/readyz").status_code == 200
+        health = client.get("/healthz")
+        assert health.status_code == 503
+        assert health.json()["runtime"]["tickFreshness"]["stale"] is True
+        metrics = client.get("/metrics")
+        assert metrics.status_code == 200
+        assert "krabville_tick_stale 1" in metrics.text
+        assert 'krabville_model_jobs{status="queued"}' in metrics.text
+
+
 def test_html_prevents_edge_script_injection(settings_factory) -> None:
     settings = settings_factory()
     settings.frontend_dir.mkdir(parents=True)

@@ -2768,9 +2768,27 @@ def stop_after_day(connection: sqlite3.Connection) -> None:
         )
 
 
-def diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
+def _age_seconds(value: Any, now: dt.datetime) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return max(0.0, (now - parsed).total_seconds())
+
+
+def diagnose(
+    connection: sqlite3.Connection,
+    *,
+    tick_seconds: float = 12.5,
+    tick_stale_seconds: float = 0.0,
+) -> dict[str, Any]:
     quick = str(connection.execute("PRAGMA quick_check").fetchone()[0])
     season = _season_row(connection)
+    now = dt.datetime.now(dt.timezone.utc)
     jobs = (
         {
             row["status"]: int(row["count"])
@@ -2782,6 +2800,61 @@ def diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
         if season
         else {}
     )
+    latest_event = (
+        connection.execute(
+            "SELECT seq,tick,event_type,created_at FROM event_stream "
+            "WHERE season_id=? ORDER BY seq DESC LIMIT 1",
+            (season["id"],),
+        ).fetchone()
+        if season
+        else None
+    )
+    latest_tick = (
+        connection.execute(
+            "SELECT seq,tick,created_at FROM event_stream "
+            "WHERE season_id=? AND event_type='tick' ORDER BY seq DESC LIMIT 1",
+            (season["id"],),
+        ).fetchone()
+        if season
+        else None
+    )
+    heartbeat_at = latest_tick["created_at"] if latest_tick else (
+        season["started_at"] if season else None
+    )
+    heartbeat_age = _age_seconds(heartbeat_at, now)
+    stale_after = tick_stale_seconds or max(60.0, float(tick_seconds) * 20.0)
+    tick_stale = bool(
+        season
+        and season["status"] == "running"
+        and heartbeat_age is not None
+        and heartbeat_age > stale_after
+    )
+    stale_leases = (
+        int(
+            connection.execute(
+                "SELECT COUNT(*) FROM model_jobs "
+                "WHERE season_id=? AND status='leased' AND lease_until<?",
+                (season["id"], now.isoformat(timespec="seconds")),
+            ).fetchone()[0]
+        )
+        if season
+        else 0
+    )
+    oldest_queued = (
+        connection.execute(
+            "SELECT MIN(created_at) FROM model_jobs WHERE season_id=? AND status='queued'",
+            (season["id"],),
+        ).fetchone()[0]
+        if season
+        else None
+    )
+    queue = {
+        "counts": jobs,
+        "pressure": int(jobs.get("queued", 0)) + int(jobs.get("leased", 0)),
+        "staleLeases": stale_leases,
+        "oldestQueuedAt": oldest_queued,
+        "oldestQueuedAgeSeconds": _age_seconds(oldest_queued, now),
+    }
     season_status = (
         {
             "id": int(season["id"]),
@@ -2799,11 +2872,31 @@ def diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
         if season
         else None
     )
+    ok = quick == "ok" and not tick_stale and stale_leases == 0
     return {
-        "ok": quick == "ok",
+        "ok": ok,
+        "status": "healthy" if ok else "failed" if quick != "ok" else "degraded",
         "database": quick,
         "season": season_status,
         "jobs": jobs,
+        "runtime": {
+            "eventSequence": int(latest_event["seq"]) if latest_event else 0,
+            "latestEventType": latest_event["event_type"] if latest_event else None,
+            "latestEventAt": latest_event["created_at"] if latest_event else None,
+            "tickFreshness": {
+                "heartbeatTick": int(latest_tick["tick"]) if latest_tick else 0,
+                "heartbeatAt": heartbeat_at,
+                "ageSeconds": heartbeat_age,
+                "staleAfterSeconds": stale_after,
+                "stale": tick_stale,
+                "ticksSinceHeartbeat": (
+                    max(0, int(season["current_tick"]) - int(latest_tick["tick"]))
+                    if season and latest_tick
+                    else int(season["current_tick"]) if season else 0
+                ),
+            },
+            "queue": queue,
+        },
         "residents": int(
             connection.execute("SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1").fetchone()[0]
         ),

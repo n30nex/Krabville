@@ -21,7 +21,7 @@ from .content import LOCATION_POINTS
 from .db import connect, dumps, initialize, loads, now_iso, transaction
 from .security import VoteSecurity, new_csrf
 from .runtime_v2 import account_balance, population_target_for_season
-from .world import _season_chapter, _weather
+from .world import _season_chapter, _weather, diagnose
 
 
 class VoteRequest(BaseModel):
@@ -2034,17 +2034,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.set_cookie("kv_csrf", new_csrf(), httponly=False, secure=secure, samesite="lax", max_age=86400)
         return response
 
-    @app.get("/healthz")
-    def healthz():
+    def runtime_health() -> dict[str, Any]:
         connection = connect(settings.database_path, readonly=True)
         try:
-            quick = connection.execute("PRAGMA quick_check").fetchone()[0]
             season = _season(connection)
+            result = diagnose(
+                connection,
+                tick_seconds=settings.tick_seconds,
+                tick_stale_seconds=settings.tick_stale_seconds,
+            )
             season_payload = (
                 {
                     "number": int(season["number"]),
                     "status": season["status"],
                     "day": int(season["current_day"]),
+                    "tick": int(season["current_tick"]),
+                    "targetTicks": int(season["target_ticks"]),
                     "progressPercent": round(
                         (int(season["current_tick"]) / int(season["target_ticks"])) * 100,
                         2,
@@ -2056,9 +2061,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 else None
             )
             return {
-                "ok": quick == "ok",
+                **result,
                 "release": {"version": __version__, "commit": settings.release_commit},
-                "database": quick,
                 "seasonStatus": season["status"] if season else "draft",
                 "season": season_payload,
                 "models": {
@@ -2068,15 +2072,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "fallbackReasoning": settings.fallback_reasoning,
                 },
                 "usage": _usage(connection, int(season["id"]), settings) if season else None,
-                "residentCount": int(connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0]),
+                "residentCount": result["residents"],
                 "updatedAt": now_iso(),
             }
         finally:
             connection.close()
 
+    @app.get("/livez")
+    def livez():
+        return {"ok": True, "release": {"version": __version__, "commit": settings.release_commit}}
+
+    @app.get("/healthz")
+    def healthz():
+        payload = runtime_health()
+        return JSONResponse(payload, status_code=200 if payload["ok"] else 503)
+
     @app.get("/readyz")
     def readyz():
-        return healthz()
+        payload = runtime_health()
+        return JSONResponse(payload, status_code=200 if payload["database"] == "ok" else 503)
+
+    @app.get("/metrics")
+    def metrics():
+        payload = runtime_health()
+        runtime = payload["runtime"]
+        freshness = runtime["tickFreshness"]
+        queue = runtime["queue"]
+        season = payload.get("season") or {}
+        lines = [
+            "# HELP krabville_runtime_healthy Whether database, tick, and queue checks pass.",
+            "# TYPE krabville_runtime_healthy gauge",
+            f"krabville_runtime_healthy {1 if payload['ok'] else 0}",
+            "# HELP krabville_tick Current authoritative simulation tick.",
+            "# TYPE krabville_tick gauge",
+            f"krabville_tick {int(season.get('tick', 0))}",
+            "# HELP krabville_tick_age_seconds Age of the latest persisted tick heartbeat.",
+            "# TYPE krabville_tick_age_seconds gauge",
+            f"krabville_tick_age_seconds {float(freshness.get('ageSeconds') or 0):.3f}",
+            "# HELP krabville_tick_stale Whether a running simulation missed its freshness bound.",
+            "# TYPE krabville_tick_stale gauge",
+            f"krabville_tick_stale {1 if freshness['stale'] else 0}",
+            "# HELP krabville_event_sequence Latest public event sequence.",
+            "# TYPE krabville_event_sequence gauge",
+            f"krabville_event_sequence {int(runtime['eventSequence'])}",
+            "# HELP krabville_model_jobs Model jobs by bounded status.",
+            "# TYPE krabville_model_jobs gauge",
+        ]
+        for status in ("queued", "leased", "complete", "failed", "cancelled"):
+            lines.append(
+                f'krabville_model_jobs{{status="{status}"}} {int(queue["counts"].get(status, 0))}'
+            )
+        lines.extend((
+            "# HELP krabville_model_stale_leases Expired model leases awaiting recovery.",
+            "# TYPE krabville_model_stale_leases gauge",
+            f"krabville_model_stale_leases {int(queue['staleLeases'])}",
+            "# HELP krabville_residents Living resident count.",
+            "# TYPE krabville_residents gauge",
+            f"krabville_residents {int(payload['residentCount'])}",
+        ))
+        return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
     @app.get("/api/v3/state")
     @app.get("/api/v2/state")
