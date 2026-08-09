@@ -221,10 +221,19 @@ krabville-manage report
 Run verification:
 
 ```bash
+python tools/check_version.py
 pytest
 cd frontend
 npm run build
 npm run test:e2e
+```
+
+Release automation passes all release inputs together and may verify a running
+candidate with the same command:
+
+```bash
+python tools/check_version.py --release-tag "$TAG" --release-commit "$SHA" \
+  --schema-version "$SCHEMA" --health-url "$HEALTH_URL"
 ```
 
 ## Container Deployment
