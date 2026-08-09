@@ -1,4 +1,4 @@
-# Krabville KVsim v2
+# Krabville KVsim v2.1
 
 [![CI](https://github.com/n30nex/Krabville/actions/workflows/ci.yml/badge.svg)](https://github.com/n30nex/Krabville/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-5fd6df.svg)](LICENSE)
@@ -8,11 +8,15 @@ Krabville is a persistent, event-driven social simulation built for
 workplaces, schools, shops, and public spaces while their needs, families,
 finances, goals, memories, beliefs, and relationships shape what happens next.
 
+KVsim 2.1 expands everyday life with 388 useful goods, visible clothing and
+wardrobes, needs-driven shopping and item use, employer-funded wages, real
+service spending, moving business balances, and denser economy analytics.
+
 ![Krabville live town](docs/screenshots/v2-map-desktop.png)
 
 ## A Season At A Glance
 
-| Rule | KVsim v2 behavior |
+| Rule | KVsim v2.1 behavior |
 | --- | --- |
 | World clock | Five in-world minutes every 12.5 real seconds |
 | Season length | Seven in-world days over seven real hours |
@@ -135,7 +139,7 @@ and private operational details are never serialized by the public API.
 
 ## API
 
-`/api/v3` is the KVsim v2 public contract:
+`/api/v3` is the KVsim v2.1 public contract:
 
 - `GET /api/v3/state`
 - `GET /api/v3/events`

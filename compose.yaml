@@ -1,7 +1,7 @@
 name: krabville
 
 x-runtime: &runtime
-  image: krabville:2.0.3
+  image: krabville:2.1.0
   build:
     context: .
   user: "${KRABVILLE_UID:-1000}:${KRABVILLE_GID:-1000}"
