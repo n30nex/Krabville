@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -10,6 +11,10 @@ from typing import Any
 
 from .config import Settings
 from .content import LOCATION_POINTS, RESIDENTS, RESIDENT_DETAILS
+
+
+class MigrationError(RuntimeError):
+    pass
 
 
 def now_iso() -> str:
@@ -58,12 +63,30 @@ def transaction(connection: sqlite3.Connection, *, immediate: bool = False) -> I
         connection.commit()
 
 
-def required_schema_version() -> int:
-    migration_dir = Path(__file__).with_name("migrations")
-    return max(
-        (int(path.stem.split("_", 1)[0]) for path in migration_dir.glob("*.sql")),
-        default=0,
-    )
+def _migration_files(
+    migration_dir: Path | None = None,
+) -> list[tuple[int, Path, str]]:
+    root = migration_dir or Path(__file__).with_name("migrations")
+    migrations: list[tuple[int, Path, str]] = []
+    versions: set[int] = set()
+    for path in root.glob("*.sql"):
+        try:
+            version = int(path.stem.split("_", 1)[0])
+        except ValueError as error:
+            raise MigrationError(f"invalid migration filename: {path.name}") from error
+        if version in versions:
+            raise MigrationError(f"duplicate migration version: {version:03d}")
+        versions.add(version)
+        migrations.append(
+            (version, path, hashlib.sha256(path.read_bytes()).hexdigest())
+        )
+    if not migrations:
+        raise MigrationError(f"no migration files found in {root}")
+    return sorted(migrations)
+
+
+def required_schema_version(migration_dir: Path | None = None) -> int:
+    return max(version for version, _, _ in _migration_files(migration_dir))
 
 
 def applied_schema_version(connection: sqlite3.Connection) -> int:
@@ -73,23 +96,119 @@ def applied_schema_version(connection: sqlite3.Connection) -> int:
     return int(row[0])
 
 
-def migrate(connection: sqlite3.Connection) -> None:
+def _migration_columns(connection: sqlite3.Connection) -> set[str]:
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone():
+        return set()
+    return {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(schema_migrations)")
+    }
+
+
+def _validate_applied_migrations(
+    connection: sqlite3.Connection,
+    migrations: list[tuple[int, Path, str]],
+    *,
+    require_complete: bool,
+) -> dict[str, int | str]:
+    columns = _migration_columns(connection)
+    if not columns:
+        raise MigrationError("schema_migrations is missing; run `krabville-manage bootstrap`")
+    has_checksums = "checksum" in columns
+    checksum_sql = "checksum" if has_checksums else "NULL AS checksum"
+    applied = {
+        int(row["version"]): row["checksum"]
+        for row in connection.execute(
+            f"SELECT version,{checksum_sql} FROM schema_migrations ORDER BY version"
+        )
+    }
+    expected = {version: checksum for version, _, checksum in migrations}
+    unknown = sorted(applied.keys() - expected.keys())
+    if unknown:
+        raise MigrationError(f"database contains unknown migration versions: {unknown}")
+    for version, stored_checksum in applied.items():
+        if stored_checksum is None:
+            if has_checksums:
+                raise MigrationError(f"migration {version:03d} has no recorded checksum")
+            continue
+        if str(stored_checksum) != expected[version]:
+            raise MigrationError(
+                f"migration {version:03d} checksum mismatch; applied migrations are immutable"
+            )
+    pending = sorted(expected.keys() - applied.keys())
+    if require_complete:
+        if not has_checksums:
+            raise MigrationError(
+                "migration checksum metadata is missing; run `krabville-manage bootstrap`"
+            )
+        if pending:
+            raise MigrationError(
+                f"database schema is not bootstrapped; pending migrations: {pending}"
+            )
+    return {
+        "version": max(applied, default=0),
+        "migrationCount": len(applied),
+        "checksumState": "ok" if has_checksums and not pending else "incomplete",
+    }
+
+
+def assert_schema(
+    connection: sqlite3.Connection, migration_dir: Path | None = None
+) -> dict[str, int | str]:
+    return _validate_applied_migrations(
+        connection, _migration_files(migration_dir), require_complete=True
+    )
+
+
+def _apply_migration(
+    connection: sqlite3.Connection,
+    migration: tuple[int, Path, str],
+    migrations: list[tuple[int, Path, str]],
+) -> None:
+    version, path, checksum = migration
+    script = path.read_text(encoding="utf-8")
+    try:
+        connection.executescript(f"BEGIN IMMEDIATE;\n{script}\n")
+        if "checksum" in _migration_columns(connection):
+            connection.execute(
+                "INSERT INTO schema_migrations(version,applied_at,checksum) VALUES(?,?,?)",
+                (version, now_iso(), checksum),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)",
+                (version, now_iso()),
+            )
+        _validate_applied_migrations(
+            connection, migrations, require_complete=False
+        )
+        connection.commit()
+    except Exception as error:
+        connection.rollback()
+        if isinstance(error, MigrationError):
+            raise
+        raise MigrationError(f"migration {path.name} failed: {error}") from error
+
+
+def migrate(
+    connection: sqlite3.Connection, migration_dir: Path | None = None
+) -> dict[str, int | str]:
+    migrations = _migration_files(migration_dir)
     connection.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
     )
+    _validate_applied_migrations(connection, migrations, require_complete=False)
     applied = {
-        int(row[0]) for row in connection.execute("SELECT version FROM schema_migrations")
+        int(row[0])
+        for row in connection.execute("SELECT version FROM schema_migrations")
     }
-    migration_dir = Path(__file__).with_name("migrations")
-    for migration in sorted(migration_dir.glob("*.sql")):
-        version = int(migration.stem.split("_", 1)[0])
-        if version in applied:
+    for migration in migrations:
+        if migration[0] in applied:
             continue
-        connection.executescript(migration.read_text(encoding="utf-8"))
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-            (version, now_iso()),
-        )
+        _apply_migration(connection, migration, migrations)
+        applied.add(migration[0])
+    return assert_schema(connection, migration_dir)
 
 
 def seed_residents(connection: sqlite3.Connection) -> None:
@@ -130,13 +249,34 @@ def seed_residents(connection: sqlite3.Connection) -> None:
 def initialize(settings: Settings) -> sqlite3.Connection:
     settings.ensure_directories()
     connection = connect(settings.database_path)
-    migrate(connection)
-    seed_residents(connection)
-    from .commerce_v2 import repair_dependent_finances, seed_commerce
+    try:
+        migrate(connection)
+        seed_residents(connection)
+        from .commerce_v2 import repair_dependent_finances, seed_commerce
 
-    seed_commerce(connection)
-    repair_dependent_finances(connection)
-    return connection
+        seed_commerce(connection)
+        repair_dependent_finances(connection)
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def open_database(
+    settings: Settings, *, readonly: bool = False
+) -> sqlite3.Connection:
+    settings.ensure_directories()
+    if not settings.database_path.is_file():
+        raise MigrationError(
+            "database is not bootstrapped; run `krabville-manage bootstrap`"
+        )
+    connection = connect(settings.database_path, readonly=readonly)
+    try:
+        assert_schema(connection)
+        return connection
+    except Exception:
+        connection.close()
+        raise
 
 
 def emit(

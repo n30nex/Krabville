@@ -43,7 +43,9 @@ docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env -
 curl -fsS http://127.0.0.1:18889/healthz
 ```
 
-Database migrations are additive and run on startup. Make an online backup
+Database migrations are additive and owned by the one-shot `migrate` service.
+Web, engine, and inference remain stopped if bootstrap or checksum validation
+fails. See [Migration bootstrap](MIGRATION_BOOTSTRAP.md). Make an online backup
 before an upgrade. Do not delete the previous image until the health endpoint,
 public state, live tick advancement, and inference queue have all been checked.
 

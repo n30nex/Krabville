@@ -8,6 +8,22 @@ from krabville import __version__
 ROOT = Path(__file__).parents[1]
 
 
+def _service_block(compose: str, service: str) -> str:
+    marker = f"  {service}:\n"
+    block = compose.split(marker, 1)[1]
+    next_service = next(
+        (
+            index
+            for index, line in enumerate(block.splitlines(keepends=True))
+            if line.startswith("  ") and not line.startswith("    ")
+        ),
+        None,
+    )
+    if next_service is None:
+        return block
+    return "".join(block.splitlines(keepends=True)[:next_service])
+
+
 def test_systemd_health_gates_and_supervises_inference() -> None:
     compose_unit = (ROOT / "deploy" / "krabville-compose.service").read_text(encoding="utf-8")
     inference_unit = (ROOT / "deploy" / "krabville-inference.service").read_text(encoding="utf-8")
@@ -33,3 +49,14 @@ def test_release_versions_match() -> None:
     assert pyproject["project"]["version"] == __version__
     assert package["version"] == lock["version"] == lock["packages"][""]["version"] == __version__
     assert f"image: krabville:{__version__}" in compose
+
+
+def test_compose_gates_every_runtime_on_one_bootstrap_owner() -> None:
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    migrate = _service_block(compose, "migrate")
+
+    assert compose.count("command: [krabville-manage, bootstrap]") == 1
+    assert 'restart: "no"' in migrate
+    for service in ("web", "engine", "inference"):
+        block = _service_block(compose, service)
+        assert "migrate:\n        condition: service_completed_successfully" in block

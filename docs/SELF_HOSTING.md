@@ -39,7 +39,7 @@ database, control socket, and inference worker remain private.
 
 ```bash
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env build --pull
-docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm engine krabville-manage init
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm migrate
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env up -d web engine
 curl -fsS http://127.0.0.1:18889/healthz
 ```
@@ -116,7 +116,7 @@ start Season 1:
 ```bash
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env down
 rm -f runtime/data/krabville.db runtime/data/krabville.db-shm runtime/data/krabville.db-wal
-docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm engine krabville-manage init
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm migrate
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm engine krabville-manage start
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env --profile inference up -d
 curl -fsS http://127.0.0.1:18889/healthz

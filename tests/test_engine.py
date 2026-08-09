@@ -30,6 +30,7 @@ def test_curated_content_counts() -> None:
 
 def test_campaign_continues_only_natural_seasons_and_stops_at_limit(settings_factory) -> None:
     settings = settings_factory(intermission_seconds=0, season_limit=2)
+    initialize(settings).close()
     engine = Engine(settings)
     try:
         first = start_season(engine.connection, seed_hex="10" * 32)
@@ -60,7 +61,9 @@ def test_campaign_continues_only_natural_seasons_and_stops_at_limit(settings_fac
 
 
 def test_tick_failure_retries_same_tick_and_resolves(monkeypatch, settings_factory) -> None:
-    engine = Engine(settings_factory())
+    settings = settings_factory()
+    initialize(settings).close()
+    engine = Engine(settings)
     try:
         season_id = start_season(engine.connection, seed_hex="11" * 32)["seasonId"]
         real_advance = engine_module.advance_tick
@@ -96,7 +99,9 @@ def test_tick_failure_retries_same_tick_and_resolves(monkeypatch, settings_facto
 
 
 def test_three_tick_failures_pause_without_skipping(monkeypatch, settings_factory) -> None:
-    engine = Engine(settings_factory())
+    settings = settings_factory()
+    initialize(settings).close()
+    engine = Engine(settings)
     try:
         season_id = start_season(engine.connection, seed_hex="12" * 32)["seasonId"]
 

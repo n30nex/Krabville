@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from .config import Settings
-from .db import initialize
+from .db import assert_schema, initialize, open_database
 from .inference import FakeProvider, process_one
 from .history_v214 import repair_v214
 from .legacy import import_week_one
@@ -21,6 +21,7 @@ from .world import advance_tick, diagnose, queue_conversation_if_needed, start_s
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="krabville-manage")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("bootstrap")
     sub.add_parser("init")
     start = sub.add_parser("start")
     start.add_argument("--opening-slug")
@@ -44,7 +45,12 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _parser().parse_args()
     settings = Settings.from_env()
-    connection = initialize(settings)
+    connection = (
+        initialize(settings)
+        if args.command in {"bootstrap", "init"}
+        else open_database(settings)
+    )
+
     def runtime_diagnose():
         return diagnose(
             connection,
@@ -52,8 +58,8 @@ def main() -> None:
             tick_stale_seconds=settings.tick_stale_seconds,
         )
     try:
-        if args.command == "init":
-            result = runtime_diagnose()
+        if args.command in {"bootstrap", "init"}:
+            result = {"bootstrap": "ok", "schema": assert_schema(connection)}
         elif args.command == "start":
             result = start_season(connection, opening_slug=args.opening_slug)
         elif args.command == "tick":

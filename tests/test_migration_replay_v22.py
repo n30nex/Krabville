@@ -189,6 +189,9 @@ def test_retained_v22_fixture_migrates_reads_and_replays_deterministically(
         )
         migrate(connection)
         assert _migration_versions(connection) == _current_migration_versions()
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE length(checksum)=64"
+        ).fetchone()[0] == len(_current_migration_versions())
         assert {
             row[1] for row in connection.execute("PRAGMA table_info(resident_wants)")
         } >= {"source_need", "action_key", "expires_tick"}

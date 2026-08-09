@@ -47,6 +47,13 @@ x-runtime: &runtime
   networks: [simulation]
 
 services:
+  migrate:
+    <<: *runtime
+    command: [krabville-manage, bootstrap]
+    restart: "no"
+    mem_limit: 256m
+    cpus: 0.40
+
   web:
     <<: *runtime
     command: [krabville-api]
@@ -59,6 +66,9 @@ services:
       KRABVILLE_PORT: 18889
       KRABVILLE_VOTER_SECRET_FILE: /run/secrets/voter-secret
     secrets: [voter-secret]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     networks:
       simulation:
         ipv4_address: 172.28.89.10
@@ -87,6 +97,8 @@ services:
         source: ${KRABVILLE_CONTROL_HOST:-./runtime/control}
         target: /control
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       web:
         condition: service_healthy
     networks:
@@ -131,6 +143,8 @@ services:
         ipv4_address: 172.28.89.12
       inference-egress: {}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       engine:
         condition: service_healthy
 
