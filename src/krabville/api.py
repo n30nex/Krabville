@@ -388,11 +388,11 @@ def _resident_detail_v2(
         {
             "name": item["name"], "category": item["category"],
             "quantity": float(item["quantity"]), "condition": int(item["condition_score"]),
-            "assetKey": item["asset_key"],
+            "assetKey": item["asset_key"], "assetIndex": (int(item["item_id"]) - 1) % 182,
         }
         for item in connection.execute(
             """
-            SELECT i.name,i.category,i.asset_key,ri.quantity,ri.condition_score
+            SELECT i.id item_id,i.name,i.category,i.asset_key,ri.quantity,ri.condition_score
             FROM resident_inventory ri JOIN item_catalog i ON i.id=ri.item_id
             WHERE ri.resident_id=? AND ri.quantity>0 ORDER BY i.category,i.name
             """,
@@ -407,11 +407,11 @@ def _resident_detail_v2(
         {
             "name": item["name"], "category": item["category"],
             "quantity": float(item["quantity"]), "condition": int(item["condition_score"]),
-            "assetKey": item["asset_key"],
+            "assetKey": item["asset_key"], "assetIndex": (int(item["item_id"]) - 1) % 182,
         }
         for item in connection.execute(
             """
-            SELECT i.name,i.category,i.asset_key,hi.quantity,hi.condition_score
+            SELECT i.id item_id,i.name,i.category,i.asset_key,hi.quantity,hi.condition_score
             FROM household_inventory hi JOIN item_catalog i ON i.id=hi.item_id
             WHERE hi.household_id=? AND hi.quantity>0 ORDER BY i.category,i.name
             """,
@@ -598,6 +598,20 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             )
         ]
         business = connection.execute("SELECT id,slug,name,status FROM businesses WHERE property_id=? ORDER BY id DESC LIMIT 1", (prop["id"],)).fetchone()
+        if business:
+            inventory_summary = connection.execute(
+                "SELECT COUNT(*),COALESCE(SUM(quantity),0) FROM business_inventory WHERE business_id=? AND quantity>0",
+                (business["id"],),
+            ).fetchone()
+        else:
+            inventory_summary = connection.execute(
+                """
+                SELECT COUNT(DISTINCT hi.item_id),COALESCE(SUM(hi.quantity),0)
+                FROM property_occupancy po JOIN household_inventory hi ON hi.household_id=po.household_id
+                WHERE po.property_id=? AND po.ended_season_id IS NULL AND hi.quantity>0
+                """,
+                (prop["id"],),
+            ).fetchone()
         property_rows.append({
             "id": int(prop["id"]), "slug": prop["slug"], "name": prop["name"],
             "type": prop["property_type"], "address": prop["address"],
@@ -607,6 +621,8 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "condition": int(prop["condition_score"]),
             "interiorAvailable": bool(prop["interior_key"]),
             "interiorVariant": int(prop["interior_variant"]),
+            "inventoryItems": int(inventory_summary[0] or 0),
+            "inventoryUnits": float(inventory_summary[1] or 0),
             "x": float(point[0]) if point else None, "y": float(point[1]) if point else None,
             "business": dict(business) if business else None,
         })
@@ -619,7 +635,7 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         account = connection.execute("SELECT id FROM financial_accounts WHERE business_id=? AND name='Operating'", (business["id"],)).fetchone()
         employees = int(connection.execute("SELECT COUNT(*) FROM employment e JOIN jobs j ON j.id=e.job_id WHERE j.business_id=? AND e.status='active'", (business["id"],)).fetchone()[0])
         inventory = connection.execute(
-            "SELECT COALESCE(SUM(quantity),0),SUM(CASE WHEN quantity<=reorder_point THEN 1 ELSE 0 END) FROM business_inventory WHERE business_id=?",
+            "SELECT COALESCE(SUM(quantity),0),SUM(CASE WHEN quantity<=reorder_point THEN 1 ELSE 0 END),COUNT(*) FROM business_inventory WHERE business_id=?",
             (business["id"],),
         ).fetchone()
         sales = connection.execute(
@@ -647,7 +663,8 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "location": prop["map_location"] if prop else None,
             "cash": account_balance(connection, int(account[0])) / 100 if account else 0,
             "status": business["status"], "inventoryUnits": float(inventory[0] or 0),
-            "lowStockItems": int(inventory[1] or 0), "sales": int(sales) / 100,
+            "lowStockItems": int(inventory[1] or 0), "inventoryItems": int(inventory[2] or 0),
+            "sales": int(sales) / 100,
         })
     resident_net_worth = []
     for resident in connection.execute("SELECT id FROM residents"):
@@ -731,11 +748,71 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             """
         )
     ]
+    relationship_summary = connection.execute(
+        """
+        SELECT COUNT(*) pairs,COALESCE(SUM(interactions),0) interactions,
+          COALESCE(AVG(affinity),0) affinity,COALESCE(AVG(trust),0) trust,
+          COALESCE(AVG(tension),0) tension,COALESCE(AVG(familiarity),0) familiarity
+        FROM relationships WHERE season_id=?
+        """,
+        (season_id,),
+    ).fetchone()
+    strongest_connections = [
+        {
+            "residentA": row["resident_a_name"], "residentB": row["resident_b_name"],
+            "affinity": int(row["affinity"]), "trust": int(row["trust"]),
+            "tension": int(row["tension"]), "interactions": int(row["interactions"]),
+        }
+        for row in connection.execute(
+            """
+            SELECT a.name resident_a_name,b.name resident_b_name,r.affinity,r.trust,r.tension,r.interactions
+            FROM relationships r JOIN residents a ON a.id=r.resident_a JOIN residents b ON b.id=r.resident_b
+            WHERE r.season_id=? ORDER BY (r.affinity+r.trust+r.tension) DESC,r.interactions DESC LIMIT 12
+            """,
+            (season_id,),
+        )
+    ]
+    inventory_by_category = [
+        {"category": row["category"], "units": float(row["units"] or 0), "items": int(row["items"] or 0)}
+        for row in connection.execute(
+            """
+            SELECT category,SUM(quantity) units,COUNT(DISTINCT item_id) items FROM (
+              SELECT i.category,bi.item_id,bi.quantity FROM business_inventory bi JOIN item_catalog i ON i.id=bi.item_id
+              UNION ALL
+              SELECT i.category,hi.item_id,hi.quantity FROM household_inventory hi JOIN item_catalog i ON i.id=hi.item_id
+              UNION ALL
+              SELECT i.category,ri.item_id,ri.quantity FROM resident_inventory ri JOIN item_catalog i ON i.id=ri.item_id
+            ) GROUP BY category ORDER BY units DESC
+            """
+        )
+    ]
+    movement_summary = [
+        {"type": row["movement_type"], "units": float(row["units"] or 0), "events": int(row["events"] or 0)}
+        for row in connection.execute(
+            """
+            SELECT movement_type,SUM(quantity) units,COUNT(*) events FROM inventory_movements
+            WHERE season_id=? GROUP BY movement_type ORDER BY units DESC
+            """,
+            (season_id,),
+        )
+    ]
+    price_history = [
+        {"day": int(row["day"]), "averagePrice": int(row["average_price"] or 0) / 100, "unitsSold": float(row["units_sold"] or 0)}
+        for row in connection.execute(
+            """
+            SELECT day,AVG(average_price_cents) average_price,SUM(units_sold) units_sold
+            FROM price_history WHERE season_id=? GROUP BY day ORDER BY day
+            """,
+            (season_id,),
+        )
+    ]
     return {
         "world": {
             "width": 3072, "height": 2048, "coordinateSpace": "legacy",
             "mapAsset": "/assets/kvsim-town-v2.webp",
-            "interiorsAsset": "/assets/interiors-v2.png",
+            "interiorsAsset": "/assets/interiors-v3.png",
+            "weatherAsset": "/assets/weather-seasons-v1.png",
+            "inventoryAsset": "/assets/inventory-items-v1.png",
         },
         "ledger": ledger,
         "townEvents": ledger,
@@ -744,6 +821,20 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         "properties": property_rows,
         "buildings": property_rows,
         "communications": communications,
+        "analytics": {
+            "relationships": {
+                "pairs": int(relationship_summary["pairs"] or 0),
+                "interactions": int(relationship_summary["interactions"] or 0),
+                "affinity": round(float(relationship_summary["affinity"] or 0), 1),
+                "trust": round(float(relationship_summary["trust"] or 0), 1),
+                "tension": round(float(relationship_summary["tension"] or 0), 1),
+                "familiarity": round(float(relationship_summary["familiarity"] or 0), 1),
+            },
+            "strongestConnections": strongest_connections,
+            "inventoryByCategory": inventory_by_category,
+            "movements": movement_summary,
+            "prices": price_history,
+        },
         "economy": {
             "currency": "CAD", "totalCash": total_cash_cents / 100,
             "totalDebt": total_debt_cents / 100, "totalInvestments": total_investments_cents / 100,
@@ -778,9 +869,9 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
             "season": None,
             "models": {
                 "primary": settings.primary_model,
-                "primaryReasoning": "low",
+                "primaryReasoning": settings.primary_reasoning,
                 "fallback": settings.fallback_model,
-                "fallbackReasoning": "high",
+                "fallbackReasoning": settings.fallback_reasoning,
             },
             "currentEvent": None,
             "residents": [],
@@ -807,7 +898,7 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
                 "height": 2048,
                 "coordinateSpace": "legacy",
                 "mapAsset": "/assets/kvsim-town-v2.webp",
-                "interiorsAsset": "/assets/interiors-v2.png",
+                "interiorsAsset": "/assets/interiors-v3.png",
             },
             "updatedAt": now_iso(),
         }
@@ -940,9 +1031,9 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
         },
         "models": {
             "primary": settings.primary_model,
-            "primaryReasoning": "low",
+            "primaryReasoning": settings.primary_reasoning,
             "fallback": settings.fallback_model,
-            "fallbackReasoning": "high",
+            "fallbackReasoning": settings.fallback_reasoning,
         },
         "currentEvent": (
             {
@@ -1047,9 +1138,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "season": season_payload,
                 "models": {
                     "primary": settings.primary_model,
-                    "primaryReasoning": "low",
+                    "primaryReasoning": settings.primary_reasoning,
                     "fallback": settings.fallback_model,
-                    "fallbackReasoning": "high",
+                    "fallbackReasoning": settings.fallback_reasoning,
                 },
                 "usage": _usage(connection, int(season["id"]), settings) if season else None,
                 "residentCount": int(connection.execute("SELECT COUNT(*) FROM residents").fetchone()[0]),
@@ -1197,11 +1288,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "name": row["name"], "category": row["category"],
                         "quantity": float(row["quantity"]), "price": int(row["price_cents"]) / 100,
                         "lowStock": float(row["quantity"]) <= float(row["reorder_point"]),
-                        "assetKey": row["asset_key"],
+                        "assetKey": row["asset_key"], "assetIndex": (int(row["item_id"]) - 1) % 182,
                     }
                     for row in connection.execute(
                         """
-                        SELECT i.name,i.category,i.asset_key,bi.quantity,bi.price_cents,bi.reorder_point
+                        SELECT i.id item_id,i.name,i.category,i.asset_key,bi.quantity,bi.price_cents,bi.reorder_point
                         FROM business_inventory bi JOIN item_catalog i ON i.id=bi.item_id
                         WHERE bi.business_id=? ORDER BY i.category,i.name
                         """,
@@ -1231,10 +1322,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     {
                         "name": row["name"], "category": row["category"],
                         "quantity": float(row["quantity"]), "assetKey": row["asset_key"],
+                        "assetIndex": (int(row["item_id"]) - 1) % 182,
                     }
                     for row in connection.execute(
                         """
-                        SELECT i.name,i.category,i.asset_key,hi.quantity FROM household_inventory hi
+                        SELECT i.id item_id,i.name,i.category,i.asset_key,hi.quantity FROM household_inventory hi
                         JOIN item_catalog i ON i.id=hi.item_id
                         WHERE hi.household_id=? AND hi.quantity>0 ORDER BY i.category,i.name
                         """,

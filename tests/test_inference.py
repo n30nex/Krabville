@@ -75,7 +75,7 @@ def test_spark_failure_falls_back_once_to_luna(settings_factory) -> None:
     assert process_one(connection, settings, provider)
     assert provider.calls == [
         ("gpt-5.3-codex-spark", "low"),
-        ("gpt-5.6-luna", "high"),
+        ("gpt-5.6-luna", "low"),
     ]
     usage = list(connection.execute("SELECT model,status,attempt_number FROM model_usage ORDER BY id"))
     assert [tuple(row) for row in usage] == [
@@ -152,6 +152,35 @@ def test_expired_lease_is_recovered(settings_factory) -> None:
     row = connection.execute("SELECT status,error_code FROM model_jobs ORDER BY id LIMIT 1").fetchone()
     assert row["status"] == "complete"
     assert row["error_code"] is None
+    connection.close()
+
+
+def test_requeued_job_recovers_from_a_stale_attempt_counter(settings_factory) -> None:
+    settings = settings_factory()
+    connection = initialize(settings)
+    season_id = start_season(connection, seed_hex="66" * 32)["seasonId"]
+    job_id = connection.execute("SELECT MIN(id) FROM model_jobs WHERE season_id=?", (season_id,)).fetchone()[0]
+    connection.execute(
+        """
+        INSERT INTO model_usage(
+          season_id,job_id,attempt_number,model,status,total_tokens,reserved_at,completed_at
+        ) VALUES(?,?,?,?,?,?,?,?)
+        """,
+        (season_id, job_id, 1, settings.primary_model, "failed", 8000, "now", "now"),
+    )
+    connection.execute("UPDATE model_jobs SET attempts=0,status='queued' WHERE id=?", (job_id,))
+    connection.commit()
+
+    assert process_one(connection, settings, FakeProvider())
+    attempts = connection.execute(
+        "SELECT attempt_number,model,status FROM model_usage WHERE job_id=? ORDER BY attempt_number",
+        (job_id,),
+    ).fetchall()
+    assert [tuple(row) for row in attempts] == [
+        (1, settings.primary_model, "failed"),
+        (2, settings.fallback_model, "complete"),
+    ]
+    assert connection.execute("SELECT attempts FROM model_jobs WHERE id=?", (job_id,)).fetchone()[0] == 2
     connection.close()
 
 

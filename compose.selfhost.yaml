@@ -1,0 +1,4 @@
+services:
+  web:
+    ports:
+      - "${KRABVILLE_BIND_ADDRESS:-127.0.0.1}:${KRABVILLE_HOST_PORT:-18889}:18889"

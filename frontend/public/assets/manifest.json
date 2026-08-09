@@ -2,9 +2,34 @@
   "schemaVersion": 1,
   "files": [
     {
+      "name": "interiors-v2.png",
+      "bytes": 1316784,
+      "sha256": "c9dfffa14d77e8676abf10821848675f9eb23c52b721a9b61eccb02ca0b0aacd"
+    },
+    {
+      "name": "interiors-v3.png",
+      "bytes": 2377742,
+      "sha256": "657dbb21b7dc406aadbcbff073ce3d57711bd1248909afedcd22001c8ba8e9ed"
+    },
+    {
+      "name": "inventory-items-v1.png",
+      "bytes": 888901,
+      "sha256": "18b5a93b7c11f6de42323d1a1461de248d4a03e4976079277b0c2061f778ee9c"
+    },
+    {
       "name": "krabville-map.webp",
       "bytes": 740792,
       "sha256": "9fc7f67ba4b2a37e224831e2c4a5d0b66375575493c403735bbb8f3bda38bd6b"
+    },
+    {
+      "name": "kvsim-town-v2.webp",
+      "bytes": 1836176,
+      "sha256": "81df5eee659cea0b2cbbde84bee675acba9391445cbb31a647803e7ca55abc97"
+    },
+    {
+      "name": "life-stages-v2.png",
+      "bytes": 415188,
+      "sha256": "c42701fd3098194eb191a2f37f68273348f9a64e036b8f3efd88b1a701c2830d"
     },
     {
       "name": "residents-a.png",
@@ -20,6 +45,11 @@
       "name": "season-001.png",
       "bytes": 2321188,
       "sha256": "259111ff2bccf20c4a46566dc6fe08c8d064dd4d0ee0c66bda6a1cff57205bab"
+    },
+    {
+      "name": "weather-seasons-v1.png",
+      "bytes": 554145,
+      "sha256": "303e3bcaf2a23723b673009437cfd73727eeb2adcb876d1a23009ae9b0b6f88e"
     }
   ]
 }

@@ -27,7 +27,23 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
         modern = v3.json()
         assert modern["schemaVersion"] == 3
         assert modern["world"]["mapAsset"] == "/assets/kvsim-town-v2.webp"
+        assert modern["world"]["interiorsAsset"] == "/assets/interiors-v3.png"
+        assert modern["world"]["weatherAsset"] == "/assets/weather-seasons-v1.png"
+        assert modern["world"]["inventoryAsset"] == "/assets/inventory-items-v1.png"
+        future_homes = [item for item in modern["properties"] if item["slug"] in {
+            "home-cedar-cottage", "home-tidepool-house", "home-maple-row", "home-north-dock-flat"
+        }]
+        assert len(future_homes) == 4
+        assert len({(item["x"], item["y"]) for item in future_homes}) == 4
+        assert all(item["x"] is not None and item["y"] is not None for item in future_homes)
         assert modern["poll"] is None
+        assert modern["analytics"]["relationships"]["pairs"] > 0
+        assert modern["analytics"]["inventoryByCategory"]
+        stocked_property = next(item for item in modern["properties"] if item["inventoryItems"] > 0)
+        assert stocked_property["inventoryUnits"] > 0
+        property_detail = client.get(f"/api/v3/properties/{stocked_property['slug']}")
+        assert property_detail.status_code == 200
+        assert all(0 <= item["assetIndex"] < 182 for item in property_detail.json()["inventory"])
         assert modern["residents"][0]["needsHighIsGood"] is True
         assert modern["residents"][0]["lifeStage"] in {"baby", "child", "teen", "adult", "senior"}
         detail = client.get(f"/api/v3/residents/{modern['residents'][0]['slug']}")

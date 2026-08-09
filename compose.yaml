@@ -4,7 +4,7 @@ x-runtime: &runtime
   image: krabville:2.0.0
   build:
     context: .
-  user: "1000:1000"
+  user: "${KRABVILLE_UID:-1000}:${KRABVILLE_GID:-1000}"
   init: true
   read_only: true
   cap_drop: [ALL]
@@ -14,7 +14,7 @@ x-runtime: &runtime
     - /tmp:rw,noexec,nosuid,nodev,size=96m,mode=1777
   volumes:
     - type: bind
-      source: ${KRABVILLE_DATA_HOST:-/opt/canadaverse/krabville-v2/data}
+      source: ${KRABVILLE_DATA_HOST:-./runtime/data}
       target: /data
   environment: &environment
     KRABVILLE_DATA_DIR: /data
@@ -24,16 +24,18 @@ x-runtime: &runtime
     KRABVILLE_ASSET_DIR: /app/frontend/dist/assets
     KRABVILLE_CONTROL_SOCKET: /data/control.sock
     KRABVILLE_PRIMARY_MODEL: ${KRABVILLE_PRIMARY_MODEL:-gpt-5.3-codex-spark}
+    KRABVILLE_PRIMARY_REASONING: ${KRABVILLE_PRIMARY_REASONING:-low}
     KRABVILLE_FALLBACK_MODEL: ${KRABVILLE_FALLBACK_MODEL:-gpt-5.6-luna}
+    KRABVILLE_FALLBACK_REASONING: ${KRABVILLE_FALLBACK_REASONING:-low}
     KRABVILLE_CALL_LIMIT: ${KRABVILLE_CALL_LIMIT:-150}
-    KRABVILLE_TOKEN_GUARD: ${KRABVILLE_TOKEN_GUARD:-500000}
+    KRABVILLE_TOKEN_GUARD: ${KRABVILLE_TOKEN_GUARD:-1500000}
     KRABVILLE_INFERENCE_TIMEOUT: ${KRABVILLE_INFERENCE_TIMEOUT:-180}
     KRABVILLE_SEASON_LIMIT: ${KRABVILLE_SEASON_LIMIT:-20}
     KRABVILLE_AUTO_CONTINUE: ${KRABVILLE_AUTO_CONTINUE:-true}
     KRABVILLE_INTERMISSION_SECONDS: ${KRABVILLE_INTERMISSION_SECONDS:-600}
     KRABVILLE_MAX_POPULATION: ${KRABVILLE_MAX_POPULATION:-32}
     KRABVILLE_MAX_ADULTS: ${KRABVILLE_MAX_ADULTS:-24}
-    KRABVILLE_PUBLIC_ORIGIN: https://krab.canadaverse.org
+    KRABVILLE_PUBLIC_ORIGIN: ${KRABVILLE_PUBLIC_ORIGIN:-http://127.0.0.1:18889}
   logging:
     driver: json-file
     options:
@@ -76,10 +78,10 @@ services:
       KRABVILLE_TICK_SECONDS: ${KRABVILLE_TICK_SECONDS:-12.5}
     volumes:
       - type: bind
-        source: ${KRABVILLE_DATA_HOST:-/opt/canadaverse/krabville-v2/data}
+        source: ${KRABVILLE_DATA_HOST:-./runtime/data}
         target: /data
       - type: bind
-        source: /run/canadaverse-control/krabville
+        source: ${KRABVILLE_CONTROL_HOST:-./runtime/control}
         target: /control
     networks:
       simulation:
@@ -106,14 +108,14 @@ services:
       CODEX_HOME: /tmp/codex-home
     volumes:
       - type: bind
-        source: ${KRABVILLE_DATA_HOST:-/opt/canadaverse/krabville-v2/data}
+        source: ${KRABVILLE_DATA_HOST:-./runtime/data}
         target: /data
       - type: bind
-        source: ${KRABVILLE_CODEX_BIN_HOST:-/home/neonx/.codex/packages/standalone/releases/0.144.6-aarch64-unknown-linux-musl/bin/codex}
+        source: ${KRABVILLE_CODEX_BIN_HOST:-/usr/local/bin/codex}
         target: /usr/local/bin/codex
         read_only: true
       - type: bind
-        source: ${KRABVILLE_CODEX_AUTH_HOST:-/home/neonx/.codex/auth.json}
+        source: ${KRABVILLE_CODEX_AUTH_HOST:-./deploy/secrets/codex-auth.json}
         target: /run/secrets/codex-auth.json
         read_only: true
     networks:
