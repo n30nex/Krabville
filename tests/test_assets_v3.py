@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from krabville.commerce_v2 import INTERIOR_VARIANTS
+from krabville.commerce_v2 import CATALOG, INTERIOR_VARIANTS, ITEM_ASSET_INDEX
 from krabville.db import initialize
 from krabville.world import start_season
 
@@ -44,17 +44,24 @@ def test_every_current_property_has_its_named_interior(settings_factory) -> None
 
 def test_weather_and_inventory_atlases_have_fixed_populated_frames() -> None:
     assets = Path(__file__).resolve().parents[1] / "frontend" / "public" / "assets"
-    for name, size, columns, rows in (
-        ("weather-seasons-v1.png", (1024, 1024), 8, 8),
-        ("inventory-items-v1.png", (896, 832), 14, 13),
-    ):
-        with Image.open(assets / name) as image:
-            assert image.mode == "RGBA"
-            assert image.size == size
-            assert image.getpixel((0, 0))[3] == 0
-            frame_width = image.width // columns
-            frame_height = image.height // rows
-            for row in range(rows):
-                for column in range(columns):
-                    frame = image.crop((column * frame_width, row * frame_height, (column + 1) * frame_width, (row + 1) * frame_height))
-                    assert frame.getchannel("A").getbbox(), f"empty {name} frame {row}:{column}"
+    with Image.open(assets / "weather-seasons-v1.png") as image:
+        assert image.mode == "RGBA"
+        assert image.size == (1024, 1024)
+        assert image.getpixel((0, 0))[3] == 0
+        for row in range(8):
+            for column in range(8):
+                frame = image.crop((column * 128, row * 128, (column + 1) * 128, (row + 1) * 128))
+                assert frame.getchannel("A").getbbox(), f"empty weather frame {row}:{column}"
+
+    catalog_skus = {str(item[0]) for item in CATALOG}
+    assert len(catalog_skus) >= 380
+    assert catalog_skus == set(ITEM_ASSET_INDEX)
+    assert all(0 <= index < 196 for index in ITEM_ASSET_INDEX.values())
+    with Image.open(assets / "inventory-items-v1.png") as image:
+        assert image.mode == "RGBA"
+        assert image.size == (896, 896)
+        assert image.getpixel((0, 0))[3] == 0
+        for index in set(ITEM_ASSET_INDEX.values()):
+            column, row = index % 14, index // 14
+            frame = image.crop((column * 64, row * 64, (column + 1) * 64, (row + 1) * 64))
+            assert frame.getchannel("A").getbbox(), f"empty inventory frame {index}"

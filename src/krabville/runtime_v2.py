@@ -700,6 +700,27 @@ def add_next_generation(
             """,
             (child_id, season_id, tick),
         )
+        for sku in ("baby-clothes", "blanket", "stuffed-toy"):
+            item = connection.execute("SELECT id FROM item_catalog WHERE sku=?", (sku,)).fetchone()
+            if item:
+                connection.execute(
+                    """
+                    INSERT INTO resident_inventory(resident_id,item_id,quantity,acquired_tick)
+                    VALUES(?,?,1,?) ON CONFLICT(resident_id,item_id) DO NOTHING
+                    """,
+                    (child_id, item["id"], tick),
+                )
+        for sku, quantity in (("diapers", 3), ("baby-formula", 3), ("baby-bottle", 1)):
+            item = connection.execute("SELECT id FROM item_catalog WHERE sku=?", (sku,)).fetchone()
+            if item:
+                connection.execute(
+                    """
+                    INSERT INTO household_inventory(household_id,item_id,quantity,acquired_tick)
+                    VALUES(?,?,?,?) ON CONFLICT(household_id,item_id)
+                    DO UPDATE SET quantity=quantity+excluded.quantity,acquired_tick=excluded.acquired_tick
+                    """,
+                    (parent["household_id"], item["id"], quantity, tick),
+                )
         connection.execute(
             """
             INSERT INTO childcare_arrangements(
@@ -749,6 +770,43 @@ def account_balance(connection: sqlite3.Connection, account_id: int) -> int:
     return int(row[0]) if row else 0
 
 
+def _daily_personal_expenses(
+    season_id: int, day: int, resident_id: int, needs_json: str | None, employed: bool
+) -> dict[str, int]:
+    """Build deterministic daily spending from a resident's actual unmet needs."""
+
+    needs = loads(needs_json or "{}", {})
+    chooser = _rng(str(season_id), "daily-spend", day, resident_id)
+
+    def satisfaction(key: str, default: int = 70) -> int:
+        try:
+            return max(0, min(100, int(needs.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    expenses = {
+        "food": chooser.randint(1_150, 1_750) + max(0, 70 - satisfaction("hunger")) * 16,
+        "housing": chooser.randint(2_150, 3_050),
+        "utilities": chooser.randint(380, 780),
+        "transport": chooser.randint(400, 850) if employed else chooser.randint(80, 300),
+        "essentials": chooser.randint(250, 700),
+        "communications": chooser.randint(160, 460),
+    }
+    if satisfaction("fun") < 72 or chooser.random() < 0.34:
+        expenses["entertainment"] = chooser.randint(550, 2_200)
+    if satisfaction("hunger") < 62 or satisfaction("social") < 58 or chooser.random() < 0.28:
+        expenses["dining"] = chooser.randint(450, 1_650)
+    if satisfaction("health") < 74:
+        expenses["healthcare"] = chooser.randint(650, 2_600) + (74 - satisfaction("health")) * 25
+    if min(satisfaction("comfort"), satisfaction("safety")) < 58 or chooser.random() < 0.12:
+        expenses["repairs"] = chooser.randint(650, 3_200)
+    if satisfaction("purpose") < 68 or chooser.random() < 0.22:
+        expenses["education"] = chooser.randint(300, 1_450)
+    if min(satisfaction("social"), satisfaction("belonging")) < 62:
+        expenses["community"] = chooser.randint(250, 1_100)
+    return expenses
+
+
 def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: int, tick: int) -> dict[str, int]:
     """Post one idempotent, balanced household settlement at 04:00."""
 
@@ -761,16 +819,75 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
     if not clearing:
         return {"transactions": 0, "wages": 0, "expenses": 0}
     clearing_id = int(clearing[0])
-    totals = {"transactions": 0, "wages": 0, "expenses": 0, "childcare": 0, "debt": 0, "investments": 0}
+    business_records = list(connection.execute(
+        """
+        SELECT b.name,b.industry,a.id account_id FROM businesses b JOIN financial_accounts a
+          ON a.business_id=b.id AND a.name='Operating' AND a.status='open'
+        WHERE b.status IN ('active','struggling')
+        """
+    ))
+    business_accounts = {str(row["name"]): int(row["account_id"]) for row in business_records}
+    expense_recipients = {
+        "food": "Lagoon General Store",
+        "housing": "Krabville Credit Union",
+        "utilities": "Community House",
+        "transport": "Lagoon Ferry",
+        "essentials": "Lagoon General Store",
+        "childcare": "Krabville School",
+        "communications": "Signal House",
+        "entertainment": "Dockside Studio",
+        "dining": "Blue Kettle Cafe",
+        "healthcare": "Lagoon Health Centre",
+        "repairs": "Harbour Works",
+        "education": "Harbour Library",
+        "community": "Community House",
+    }
+    recipient_terms = {
+        "food": ("grocery", "provisions", "food"),
+        "essentials": ("shop", "provisions", "general"),
+        "communications": ("radio", "signal", "communications"),
+        "entertainment": ("studio", "creative", "recreation"),
+        "dining": ("cafe", "food"),
+        "healthcare": ("health", "medical", "care"),
+        "repairs": ("repair", "hardware", "works"),
+        "education": ("school", "library", "education"),
+        "community": ("community", "care", "civic"),
+        "childcare": ("school", "care", "child"),
+    }
+    expense_accounts: dict[str, list[int]] = {}
+    for category, default_name in expense_recipients.items():
+        candidates = [business_accounts[default_name]] if default_name in business_accounts else []
+        for business in business_records:
+            description = f"{business['name']} {business['industry']}".casefold()
+            if any(term in description for term in recipient_terms.get(category, ())):
+                candidates.append(int(business["account_id"]))
+        expense_accounts[category] = list(dict.fromkeys(candidates))
+    totals = {
+        "transactions": 0,
+        "wages": 0,
+        "expenses": 0,
+        "childcare": 0,
+        "debt": 0,
+        "investments": 0,
+        "businessIncome": 0,
+        "businessPayroll": 0,
+        "servicePurchases": 0,
+    }
     for row in connection.execute(
         """
-        SELECT r.id,r.name,a.id account_id,e.wage_cents,e.scheduled_minutes_per_day,e.status
+        SELECT r.id,r.name,a.id account_id,e.wage_cents,e.scheduled_minutes_per_day,e.status,
+          employer.id employer_account_id,s.needs_json
         FROM residents r JOIN financial_accounts a ON a.resident_id=r.id AND a.name='Personal chequing'
+        LEFT JOIN resident_state s ON s.resident_id=r.id AND s.season_id=?
         LEFT JOIN employment e ON e.resident_id=r.id AND e.status IN ('active','leave')
+        LEFT JOIN jobs j ON j.id=e.job_id
+        LEFT JOIN financial_accounts employer ON employer.business_id=j.business_id
+          AND employer.name='Operating' AND employer.status='open'
         JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
           AND l.current_stage IN ('teen','adult','senior')
         ORDER BY r.id
-        """
+        """,
+        (season_id,),
     ):
         key = f"settlement:{day}:resident:{row['id']}"
         transaction_row = connection.execute(
@@ -814,6 +931,9 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
         before_bank = account_balance(connection, int(row["account_id"]))
         before_debt = int(debt["outstanding_cents"]) if debt else 0
         before_investment = int(investment["market_value_cents"]) if investment else 0
+        expenses = _daily_personal_expenses(
+            season_id, day, int(row["id"]), row["needs_json"], row["status"] == "active"
+        )
         result = settle_day({
             "balances": {
                 "cash_cents": 0,
@@ -826,7 +946,7 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
                 "hourly_wage_cents": int(row["wage_cents"] or 0),
                 "worked_minutes": int(row["scheduled_minutes_per_day"] or 0),
             } if row["status"] else {},
-            "expenses": {"food": 1_800, "housing": 2_500, "utilities": 500, "transport": 600, "essentials": 400},
+            "expenses": expenses,
             "childcare": {"active": childcare > 0, "cost_per_day_cents": childcare},
             "debt": {
                 "annual_rate_basis_points": int(debt["annual_rate_basis_points"]) if debt else 750,
@@ -876,16 +996,46 @@ def settle_daily_economy(connection: sqlite3.Connection, season_id: int, day: in
             """,
             (season_id, tick, f"Daily economy settlement for {row['name']}", key, now_iso(), now_iso()),
         ).fetchone()[0])
-        entries: list[tuple[int, int, str]] = []
-        if liquid_delta:
-            entries.append((int(row["account_id"]), liquid_delta, "daily liquid change"))
-        if investment_delta and investment:
-            entries.append((int(investment["account_id"]), investment_delta, "investment valuation"))
-        if debt_delta and debt_account_id:
-            entries.append((debt_account_id, -debt_delta, "debt liability change"))
-        offset = -sum(amount for _, amount, _ in entries)
-        if offset:
-            entries.append((clearing_id, offset, "town clearing"))
+        flows: dict[int, int] = {}
+        flow_memos: dict[int, list[str]] = {}
+
+        def add_flow(account_id: int, amount: int, memo: str) -> None:
+            if amount:
+                flows[account_id] = flows.get(account_id, 0) + amount
+                flow_memos.setdefault(account_id, []).append(memo)
+
+        add_flow(int(row["account_id"]), liquid_delta, "resident daily net")
+        if investment:
+            add_flow(int(investment["account_id"]), investment_delta, "investment valuation")
+        if debt_account_id:
+            add_flow(debt_account_id, -debt_delta, "debt balance change")
+        wages = int(result["totals"]["wages_cents"])
+        if wages and row["employer_account_id"]:
+            add_flow(int(row["employer_account_id"]), -wages, "payroll:wages")
+            totals["businessPayroll"] += wages
+        for settled in result["ledger"]:
+            category = str(settled["category"])
+            candidates = expense_accounts.get(category, [])
+            if not candidates:
+                continue
+            business_account = candidates[
+                _rng(str(season_id), "expense-recipient", day, row["id"], category).randrange(len(candidates))
+            ]
+            receipt = sum(
+                int(entry["amount_cents"])
+                for entry in settled["entries"]
+                if str(entry["account"]).startswith("expense:") and int(entry["amount_cents"]) > 0
+            )
+            add_flow(business_account, receipt, f"service:{category}")
+            totals["businessIncome"] += receipt
+            if category not in {"food", "housing", "utilities", "transport", "essentials", "childcare"}:
+                totals["servicePurchases"] += 1
+        add_flow(clearing_id, -sum(flows.values()), "balanced settlement clearing")
+        entries = [
+            (account_id, amount, "; ".join(dict.fromkeys(flow_memos.get(account_id, ["daily settlement flow"]))))
+            for account_id, amount in flows.items()
+            if amount
+        ]
         connection.executemany(
             "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
             [(transaction_id, account_id, amount, memo) for account_id, amount, memo in entries],

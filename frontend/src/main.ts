@@ -597,7 +597,8 @@ const formatCad = (value: number | undefined): string => value === undefined ? "
 
 function renderLedgerEntries(entries: LedgerEntry[], empty: string): string {
   if (!entries.length) return `<div class="empty-state">${h(empty)}</div>`;
-  return `<div class="town-card-list">${entries.slice(-16).reverse().map((entry) => `
+  const latest = entries.slice().sort((left, right) => (right.tick ?? right.day ?? 0) - (left.tick ?? left.day ?? 0)).slice(0, 16);
+  return `<div class="town-card-list">${latest.map((entry) => `
     <article><span>${h(entry.category ?? (entry.day !== undefined ? `Day ${entry.day + 1}` : "Town record"))}</span><h4>${h(entry.title)}</h4>${entry.summary ? `<p>${h(entry.summary)}</p>` : ""}${entry.amount !== undefined ? `<b>${formatCad(entry.amount)}</b>` : ""}</article>
   `).join("")}</div>`;
 }
@@ -609,32 +610,25 @@ function derivedHouseholds(value: KrabvilleState): NonNullable<KrabvilleState["h
   return [...homes].map(([home, memberNames], index) => ({ id: `v2-${index}`, name: home.replace(/ house$/i, " household"), home, memberNames }));
 }
 
+function propertyForPlace(value: KrabvilleState, place: string) {
+  return value.properties?.find((property) => property.name === place || property.mapLocation === place);
+}
+
 function renderHouseholds(value: KrabvilleState): string {
   const households = derivedHouseholds(value);
   return `<div class="town-heading"><span>Households</span><b>${households.length}</b><p>Who shares a roof, and where daily life happens.</p></div><div class="town-card-list">${households.map((household) => {
     const members = household.memberNames ?? household.memberSlugs?.map((slug) => value.residents.find((resident) => resident.slug === slug)?.name ?? slug) ?? [];
-    return `<article class="place-card"><span>${h(household.status ?? "Household")}</span><h4>${h(household.name)}</h4><p>${h(members.join(", ") || "No residents listed")}</p><small>${h(household.home)}</small><button data-place="${h(household.home)}">Focus home</button></article>`;
+    const property = propertyForPlace(value, household.home);
+    const action = property?.slug ? `data-property="${h(property.slug)}"` : `data-focus-place="${h(household.home)}"`;
+    return `<article class="place-card"><span>${h(household.status ?? "Household")}</span><h4>${h(household.name)}</h4><p>${h(members.join(", ") || "No residents listed")}</p><small>${h(household.home)}</small><button ${action}>Focus home</button></article>`;
   }).join("")}</div>`;
 }
 
-function renderEconomy(value: KrabvilleState): string {
-  const economy = value.economy;
-  const employed = economy?.employed ?? value.residents.filter((resident) => resident.role && !/student|child|retired/i.test(resident.role)).length;
-  return `<div class="town-heading"><span>Town economy</span><b>${h(economy?.currency ?? "CAD")}</b><p>Daily settlement, employment, debt, savings, and local enterprise.</p></div>
-    <div class="metric-grid"><article><span>Employed</span><b>${employed}</b></article><article><span>Town cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article></div>
-    <div class="section-label"><span>Businesses</span><b>${economy?.businesses?.length ?? 0}</b></div>
-    <div class="town-card-list">${economy?.businesses?.map((business) => `<article><span>${h(business.status ?? "Operating")}</span><h4>${h(business.name)}</h4><p>${h(business.owner ? `Owned by ${business.owner}` : "Ownership not published")} | ${business.employees ?? 0} staff</p><b>${formatCad(business.cash)}</b></article>`).join("") || `<div class="empty-state">Detailed accounts will appear when the KVsim v3 economy begins.</div>`}</div>`;
-}
-
 function renderFamilies(value: KrabvilleState): string {
-  if (!value.families?.length) return `<div class="town-heading"><span>Family network</span><b>v3</b><p>Kinship, caregiving, and generations will appear as the new world forms.</p></div><div class="empty-state large">The current v2 ledger has no public family graph.</div>`;
+  if (!value.families?.length) return `<div class="town-heading"><span>Family network</span><b>0</b><p>Kinship, caregiving, and generations appear here as relationships form.</p></div><div class="empty-state large">No public kinship records are available yet.</div>`;
   return `<div class="town-heading"><span>Family network</span><b>${value.families.length}</b><p>Families know only what their members have lived; spectators see the full lineage.</p></div><div class="town-card-list">${value.families.map((family) => `<article><span>Family</span><h4>${h(family.name)}</h4><p>${h(family.summary ?? family.members.map((member) => `${member.name} (${member.relation})`).join(", "))}</p></article>`).join("")}</div>`;
 }
 
-function renderProperty(value: KrabvilleState): string {
-  const properties: NonNullable<KrabvilleState["properties"]> = value.properties?.length ? value.properties : value.buildings?.length ? value.buildings : derivedHouseholds(value).map((household) => ({ name: household.home, type: "Home", interiorAvailable: true }));
-  return `<div class="town-heading"><span>Property and places</span><b>${properties.length}</b><p>Select a building to open its occupancy and interior.</p></div><div class="town-card-list">${properties.map((property) => `<article class="place-card"><span>${h(property.type ?? "Place")}${property.interiorAvailable ? " | Interior" : ""}</span><h4>${h(property.name)}</h4><p>${h(property.occupants?.map((resident) => resident.name).join(", ") || property.owner || property.status || "Town location")}</p>${property.value !== undefined ? `<b>${formatCad(property.value)}</b>` : ""}<button data-place="${h(property.name)}">Focus building</button></article>`).join("")}</div>`;
-}
 
 function renderEvents(value: KrabvilleState): string {
   const entries = value.townEvents ?? value.ledger ?? value.events.map((event) => ({ tick: event.tick, category: event.type, title: String(event.payload.title ?? event.payload.summary ?? event.type), summary: typeof event.payload.summary === "string" ? event.payload.summary : undefined }));
@@ -676,12 +670,15 @@ function sparkline(values: number[]): string {
   return `<svg class="money-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Financial history"><polyline points="${points}"></polyline></svg>`;
 }
 
-function lineChart(series: Array<{ label: string; color: string; values: number[] }>, label: string): string {
-  const values = series.flatMap((item) => item.values);
+function lineChart(series: Array<{ label: string; color: string; values: number[] }>, label: string, rebase = false): string {
+  const plotted = rebase
+    ? series.map((item) => ({ ...item, label: `${item.label} change`, values: item.values.map((value) => value - (item.values[0] ?? 0)) }))
+    : series;
+  const values = plotted.flatMap((item) => item.values);
   if (!values.length) return `<div class="empty-chart">History begins after the next daily settlement.</div>`;
   const low = Math.min(0, ...values);
   const high = Math.max(1, ...values);
-  const lines = series.map((item) => {
+  const lines = plotted.map((item) => {
     const points = item.values.map((value, index) => {
       const x = item.values.length === 1 ? 50 : (index * 100) / (item.values.length - 1);
       const y = 94 - ((value - low) * 86) / Math.max(1, high - low);
@@ -689,12 +686,12 @@ function lineChart(series: Array<{ label: string; color: string; values: number[
     }).join(" ");
     return `<polyline points="${points}" style="--series-color:${item.color}"></polyline>`;
   }).join("");
-  const dots = series.map((item) => item.values.map((value, index) => {
+  const dots = plotted.map((item) => item.values.map((value, index) => {
     const x = item.values.length === 1 ? 50 : (index * 100) / (item.values.length - 1);
     const y = 94 - ((value - low) * 86) / Math.max(1, high - low);
     return `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="1.35" style="--series-color:${item.color}"></circle>`;
   }).join("")).join("");
-  return `<div class="chart-wrap"><svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${h(label)}"><path class="chart-grid" d="M0 25H100 M0 50H100 M0 75H100"></path>${lines}${dots}</svg><div class="chart-legend">${series.map((item) => `<span style="--series-color:${item.color}"><i></i>${h(item.label)}</span>`).join("")}</div></div>`;
+  return `<div class="chart-wrap"><svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${h(label)}"><path class="chart-grid" d="M0 25H100 M0 50H100 M0 75H100"></path>${lines}${dots}</svg><div class="chart-legend">${plotted.map((item) => `<span style="--series-color:${item.color}"><i></i>${h(item.label)}</span>`).join("")}</div></div>`;
 }
 
 function barChart(items: Array<{ label: string; value: number }>, formatter: (value: number) => string = (value) => Math.round(value).toLocaleString()): string {
@@ -736,7 +733,7 @@ function renderAnalytics(value: KrabvilleState): string {
       <section><header><span>Wellbeing</span><b>Average need satisfaction</b></header>${barChart(needs, (number) => `${Math.round(number)}%`)}</section>
       <section><header><span>Mood</span><b>Residents now</b></header>${barChart(moodCounts)}</section>
       <section><header><span>Occupancy</span><b>Where everyone is</b></header>${barChart(locations)}</section>
-      <section class="wide"><header><span>Economy</span><b>Daily town finances</b></header>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Town finances over time")}</section>
+      <section class="wide"><header><span>Economy</span><b>Daily change from first sample</b></header>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Town financial change over time", true)}</section>
       <section><header><span>Inventory</span><b>Units by category</b></header>${barChart((value.analytics?.inventoryByCategory ?? []).slice(0, 12).map((item) => ({ label: item.category, value: item.units })))}</section>
       <section><header><span>Goods flow</span><b>Movement by type</b></header>${barChart((value.analytics?.movements ?? []).map((item) => ({ label: item.type, value: item.units })))}</section>
       <section><header><span>Relationships</span><b>Town averages</b></header>${barChart([{ label: "Affinity", value: relationships?.affinity ?? 0 }, { label: "Trust", value: relationships?.trust ?? 0 }, { label: "Familiarity", value: relationships?.familiarity ?? 0 }, { label: "Tension", value: relationships?.tension ?? 0 }])}</section>
@@ -748,11 +745,17 @@ function renderAnalytics(value: KrabvilleState): string {
 function inventoryGrid(items: InventoryItem[]): string {
   if (!items.length) return `<div class="empty-state">No goods recorded here.</div>`;
   return `<div class="inventory-grid">${items.map((item) => {
-    const index = Math.abs(item.assetIndex ?? stableHash(item.assetKey ?? item.name)) % 182;
+    const index = Math.abs(item.assetIndex ?? stableHash(item.assetKey ?? item.name)) % 196;
     const x = (index % 14) * (100 / 13);
-    const y = Math.floor(index / 14) * (100 / 12);
-    return `<article><span class="item-icon" data-item="${h(item.assetKey ?? "item")}" style="--item-x:${x}%;--item-y:${y}%" role="img" aria-label="${h(item.name)}"></span><div><b>${h(item.name)}</b><small>${h(item.category)}${item.condition !== undefined ? ` | ${item.condition}% condition` : ""}</small></div><em>${item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}${item.price !== undefined ? ` | ${formatCad(item.price)}` : ""}</em></article>`;
+    const y = Math.floor(index / 14) * (100 / 13);
+    return `<article data-inventory-name="${h(item.name.toLowerCase())}" data-inventory-category="${h(item.category)}"><span class="item-icon" data-item="${h(item.assetKey ?? "item")}" style="--item-x:${x}%;--item-y:${y}%" role="img" aria-label="${h(item.name)}"></span><div><b>${h(item.name)}</b><small>${h(item.category)}${item.condition !== undefined ? ` | ${item.condition}% condition` : ""}</small></div><em>${item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}${item.price !== undefined ? ` | ${formatCad(item.price)}` : ""}</em></article>`;
   }).join("")}</div>`;
+}
+
+function inventoryTools(items: InventoryItem[]): string {
+  if (items.length < 12) return "";
+  const categories = [...new Set(items.map((item) => item.category))].sort();
+  return `<div class="inventory-tools"><label><span>Find an item</span><input type="search" data-inventory-search placeholder="Search ${items.length} items" autocomplete="off" /></label><label><span>Category</span><select data-inventory-category><option value="">All ${categories.length} categories</option>${categories.map((category) => `<option value="${h(category)}">${h(titleCase(category))}</option>`).join("")}</select></label><b data-inventory-visible>${items.length} shown</b></div>`;
 }
 
 const PROPERTY_EXTERIOR_POINTS: Record<string, [number, number]> = {
@@ -800,7 +803,7 @@ function directoryProperties(kind: "homes" | "buildings" | "places"): string {
   const homes = new Set(["house", "apartment"]);
   const properties = (state.properties ?? []).filter((property) => kind === "places" || (kind === "homes" ? homes.has(property.type ?? "") : !homes.has(property.type ?? "")));
   return `<div class="directory-grid property-directory">${properties.map((property) => `
-    <button class="directory-card property-directory-card" data-property="${h(property.slug ?? "")}" data-place="${h(property.name)}">
+    <button class="directory-card property-directory-card" data-property="${h(property.slug ?? "")}">
       ${buildingThumbnail(property)}
       <span class="card-state ${h(property.status ?? "active")}">${h(property.type ?? "place")} | ${h(property.status ?? "active")}</span>
       <h3>${h(property.name)}</h3><p>${h(property.address ?? property.mapLocation ?? "Krabville")}</p>
@@ -847,8 +850,8 @@ function renderExplorer(section: string): string {
   const history = economy?.history ?? [];
   const accounts = economy?.accounts ?? [];
   const businesses = economy?.businesses ?? [];
-  return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town net worth across ${accounts.length} resident, household, and business accounts</p></div>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Krabville financial history")}</div>
-    <div class="metric-grid bank-metrics"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article><article><span>Retail goods</span><b>${Math.round(economy?.stockUnits ?? 0)}</b></article><article><span>Barters</span><b>${economy?.barters ?? 0}</b></article></div>
+  return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town net worth across ${accounts.length} resident, household, and business accounts</p></div>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Krabville financial change", true)}</div>
+    <div class="metric-grid bank-metrics"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article><article><span>Business revenue</span><b>${formatCad(economy?.businessRevenue)}</b></article><article><span>Services</span><b>${formatCad(economy?.serviceRevenue)}</b></article><article><span>Transactions</span><b>${economy?.transactionCount ?? 0}</b></article><article><span>Money moved</span><b>${formatCad(economy?.transactionVolume)}</b></article><article><span>Goods sold</span><b>${Math.round(economy?.goodsSold ?? 0)}</b></article><article><span>Stock units</span><b>${Math.round(economy?.stockUnits ?? 0)}</b></article><article><span>Barters</span><b>${economy?.barters ?? 0}</b></article><article><span>Phone calls</span><b>${economy?.phoneCalls ?? 0}</b></article></div>
     <div class="bank-analysis"><section><header><span>Account comparison</span><b>Largest balances</b></header>${barChart(accounts.slice().sort((left, right) => right.balance - left.balance).slice(0, 12).map((account) => ({ label: account.owner, value: Math.max(0, account.balance) })), formatCad)}</section><section><header><span>Business comparison</span><b>Operating cash</b></header>${barChart(businesses.slice().sort((left, right) => (right.cash ?? 0) - (left.cash ?? 0)).map((business) => ({ label: business.name, value: business.cash ?? 0 })), formatCad)}</section><section><header><span>Market prices</span><b>Average basket over days</b></header>${lineChart([{ label: "Average item", color: "#ffc857", values: (state.analytics?.prices ?? []).map((point) => point.averagePrice) }, { label: "Units sold", color: "#63d8e3", values: (state.analytics?.prices ?? []).map((point) => point.unitsSold) }], "Average prices and units sold")}</section></div>
     <div class="section-label"><span>All resident, household, and business accounts</span><b>${accounts.length}</b></div>
     <div class="bank-ledger">${accounts.map((account) => account.residentSlug
@@ -896,8 +899,25 @@ async function openProperty(slug: string, pushHistory = true): Promise<void> {
     content.innerHTML = `<div class="building-detail-head"><div><span>${h(detail.type)} | ${h(detail.status)}</span><h3>${h(detail.name)}</h3><p>${h(detail.address)} | ${detail.condition}% condition | ${formatCad(detail.value)}</p></div><button data-focus-place="${h(detail.mapLocation)}">Show on map</button></div>
       <div class="building-detail-grid"><div class="property-interior" style="--interior-x:${x}%;--interior-y:${y}%" role="group" aria-label="${h(detail.name)} live interior">${interiorActorMarkup(detail.residents, detail.slug)}</div><section><div class="section-label"><span>Inside now</span><b data-inside-count>${detail.residents.length}</b></div><div class="inside-list">${insideListMarkup(detail.residents)}</div></section></div>
       <div class="inventory-summary"><article><span>Unique items</span><b>${detail.inventory.length}</b></article><article><span>Total units</span><b>${inventoryUnits.toLocaleString(undefined, { maximumFractionDigits: 1 })}</b></article><article><span>Categories</span><b>${inventoryCategories}</b></article><article><span>Low stock</span><b>${lowStockItems}</b></article></div>
-      <div class="section-label"><span>${detail.business ? "Shop stock" : "Home inventory"}</span><b>${detail.inventory.length}</b></div>${inventoryGrid(detail.inventory)}
+      <div class="section-label"><span>${detail.business ? "Shop stock" : "Home inventory"}</span><b>${detail.inventory.length}</b></div>${inventoryTools(detail.inventory)}${inventoryGrid(detail.inventory)}
       <div class="section-label"><span>Building transactions</span><b>${detail.transactions.length}</b></div>${renderLedgerEntries(detail.transactions.map((entry) => ({ ...entry, title: entry.description })), "No business transactions recorded here.")}`;
+    const search = content.querySelector<HTMLInputElement>("[data-inventory-search]");
+    const category = content.querySelector<HTMLSelectElement>("[data-inventory-category]");
+    const visible = content.querySelector<HTMLElement>("[data-inventory-visible]");
+    const applyInventoryFilter = () => {
+      const query = search?.value.trim().toLowerCase() ?? "";
+      const selected = category?.value ?? "";
+      let shown = 0;
+      content.querySelectorAll<HTMLElement>(".inventory-grid article").forEach((item) => {
+        const matches = (!query || (item.dataset.inventoryName ?? "").includes(query))
+          && (!selected || item.dataset.inventoryCategory === selected);
+        item.hidden = !matches;
+        if (matches) shown += 1;
+      });
+      if (visible) visible.textContent = `${shown} shown`;
+    };
+    search?.addEventListener("input", applyInventoryFilter);
+    category?.addEventListener("change", applyInventoryFilter);
     document.querySelectorAll<HTMLButtonElement>(".top-nav [data-explore]").forEach((button) => button.classList.toggle("active", button.dataset.explore === "places"));
     byId("map-home").classList.remove("active");
     if (pushHistory) history.pushState(null, "", `#/property/${encodeURIComponent(slug)}`);
@@ -1033,6 +1053,8 @@ async function openResident(slug: string): Promise<void> {
     const wants = [...(detail.wants ?? []), ...(detail.aspirations ?? []), ...detail.goals.map((goal) => ({ title: goal.scope, text: goal.description, status: `${goal.status} | ${goal.progress}%` }))];
     const inventory = [...new Set([...(detail.inventory ?? []), ...detail.possessions])];
     const onPerson = detail.onPersonInventory ?? inventory.map((name) => ({ name, category: "personal", quantity: 1 }));
+    const clothing = detail.clothing ?? onPerson.filter((item) => ["clothing", "accessories"].includes(item.category));
+    const carried = onPerson.filter((item) => !["clothing", "accessories"].includes(item.category));
     const homeInventory = detail.homeInventory ?? [];
     const relationshipRows = detail.relationships.slice().sort((left, right) => (right.affinity + right.trust - right.tension) - (left.affinity + left.trust - left.tension));
     const finance = detail.finances;
@@ -1053,7 +1075,7 @@ async function openResident(slug: string): Promise<void> {
 
       <section class="detail-section dossier-section" id="dossier-needs"><div class="section-label"><span>Needs, high is healthy</span><b>${h(detail.mood)}</b></div>${displayedNeeds(detail).map(([label, value, key]) => needBar(label, value, key)).join("")}<div class="section-label"><span>Wants and aspirations</span><b>${wants.length}</b></div>${renderNotes(wants, "No public wants have formed yet.")}</section>
 
-      <section class="detail-section dossier-section" id="dossier-family"><div class="section-label"><span>Family and household</span><b>${detail.family?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Household</span><b>${h(detail.household ?? "Not yet recorded")}</b></article></div>${detail.family?.length ? `<div class="note-list">${detail.family.map((member) => `<article><span>${h(member.relation)}</span><h4>${h(member.name)}</h4><p>${h([member.lifeStage, member.household].filter(Boolean).join(" | "))}</p></article>`).join("")}</div>` : `<div class="empty-state">Kinship and caregiving arrive with the KVsim v3 family ledger.</div>`}</section>
+      <section class="detail-section dossier-section" id="dossier-family"><div class="section-label"><span>Family and household</span><b>${detail.family?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Household</span><b>${h(detail.household ?? "Not yet recorded")}</b></article></div>${detail.family?.length ? `<div class="note-list">${detail.family.map((member) => `<article><span>${h(member.relation)}</span><h4>${h(member.name)}</h4><p>${h([member.lifeStage, member.household].filter(Boolean).join(" | "))}</p></article>`).join("")}</div>` : `<div class="empty-state">No public kinship record is available for this resident.</div>`}</section>
 
       <section class="detail-section dossier-section" id="dossier-relationships"><div class="section-label"><span>Relationship map</span><b>${detail.relationships.length}</b></div><canvas class="relationship-canvas" id="relationship-canvas"></canvas><div class="relationship-list">${relationshipRows.map((relationship) => `<article><b>${h(relationship.otherName)}</b><span>Affinity ${relationship.affinity} | Trust ${relationship.trust} | Tension ${relationship.tension}</span>${relationship.kinship ? `<small>${h(relationship.kinship)}</small>` : ""}</article>`).join("")}</div></section>
 
@@ -1061,13 +1083,13 @@ async function openResident(slug: string): Promise<void> {
 
       <section class="detail-section dossier-section" id="dossier-secrets"><div class="section-label"><span>Secrets</span><b>${detail.secrets?.length ?? 0}</b></div>${renderNotes(detail.secrets, "No spectator-visible secrets yet.")}<div class="section-label"><span>Beliefs and gossip</span><b>${detail.beliefs?.length ?? 0}</b></div>${renderNotes(detail.beliefs, "No conflicting beliefs have formed yet.")}</section>
 
-      <section class="detail-section dossier-section" id="dossier-health"><div class="section-label"><span>Health and care</span><b>${h(detail.health?.status ?? "No v3 record")}</b></div><div class="fact-grid"><article><span>Conditions</span><b>${h(detail.health?.conditions?.join(", ") || "None published")}</b></article><article><span>Caregiver</span><b>${h(detail.health?.caregiver ?? "Independent")}</b></article><article><span>Care plan</span><b>${h(detail.health?.care?.join(", ") || "None")}</b></article><article><span>Stress</span><b>${detail.health?.stress ?? "--"}</b></article></div></section>
+      <section class="detail-section dossier-section" id="dossier-health"><div class="section-label"><span>Health and care</span><b>${h(detail.health?.status ?? "No current record")}</b></div><div class="fact-grid"><article><span>Conditions</span><b>${h(detail.health?.conditions?.join(", ") || "None published")}</b></article><article><span>Caregiver</span><b>${h(detail.health?.caregiver ?? "Independent")}</b></article><article><span>Care plan</span><b>${h(detail.health?.care?.join(", ") || "None")}</b></article><article><span>Stress</span><b>${detail.health?.stress ?? "--"}</b></article></div></section>
 
       <section class="detail-section dossier-section" id="dossier-career"><div class="section-label"><span>Career</span><b>${h(detail.career?.status ?? "Current")}</b></div><div class="fact-grid"><article><span>Role</span><b>${h(detail.career?.title ?? detail.role)}</b></article><article><span>Employer</span><b>${h(detail.career?.employer ?? detail.workplace)}</b></article><article><span>Schedule</span><b>${h(detail.career?.schedule ?? detail.routine)}</b></article><article><span>Daily income</span><b>${formatCad(detail.career?.income)}</b></article></div></section>
 
       <section class="detail-section dossier-section" id="dossier-finances"><div class="section-label"><span>Finances and net worth</span><b>${formatCad(finance?.netWorth)}</b></div><div class="resident-finance-chart">${sparkline(finance?.history?.map((point) => point.netWorth) ?? [])}</div><div class="metric-grid"><article><span>Cash</span><b>${formatCad(finance?.cash)}</b></article><article><span>Chequing</span><b>${formatCad(finance?.chequing)}</b></article><article><span>Savings</span><b>${formatCad(finance?.savings)}</b></article><article><span>Investments</span><b>${formatCad(finance?.investments)}</b></article><article><span>Debt</span><b>${formatCad(finance?.debt)}</b></article><article><span>Net worth</span><b>${formatCad(finance?.netWorth)}</b></article></div><div class="section-label"><span>Accounts</span><b>${finance?.accounts?.length ?? 0}</b></div><div class="account-list">${finance?.accounts?.map((account) => `<article><span>${h(account.type)} | ${h(account.status)}</span><b>${h(account.name)}</b><em>${formatCad(account.balance)}</em></article>`).join("") || `<div class="empty-state">No accounts.</div>`}</div><div class="section-label"><span>Transactions</span><b>${detail.transactions?.length ?? 0}</b></div>${renderLedgerEntries((detail.transactions ?? []).map((entry) => ({ ...entry, title: entry.description })), "No posted transactions yet.")}</section>
 
-      <section class="detail-section dossier-section" id="dossier-property"><div class="section-label"><span>Home and property</span><b>${detail.properties?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Workplace</span><b>${h(detail.workplace)}</b></article></div>${detail.properties?.map((property) => `<button class="property-row" data-property="${h(property.slug ?? "")}"><span>${h(property.type ?? "Property")}</span><b>${h(property.name)}</b><small>${formatCad(property.value)}</small></button>`).join("") ?? ""}<div class="section-label"><span>Carried now</span><b>${onPerson.length}</b></div>${inventoryGrid(onPerson)}<div class="section-label"><span>Stocked at home</span><b>${homeInventory.length}</b></div>${inventoryGrid(homeInventory)}</section>
+      <section class="detail-section dossier-section" id="dossier-property"><div class="section-label"><span>Home and property</span><b>${detail.properties?.length ?? 0}</b></div><div class="fact-grid"><article><span>Home</span><b>${h(detail.home)}</b></article><article><span>Workplace</span><b>${h(detail.workplace)}</b></article></div>${detail.properties?.map((property) => `<button class="property-row" data-property="${h(property.slug ?? "")}"><span>${h(property.type ?? "Property")}</span><b>${h(property.name)}</b><small>${formatCad(property.value)}</small></button>`).join("") ?? ""}<div class="section-label"><span>Clothing and outfit</span><b>${clothing.length}</b></div>${inventoryGrid(clothing)}<div class="section-label"><span>Carried now</span><b>${carried.length}</b></div>${inventoryGrid(carried)}<div class="section-label"><span>Stocked at home</span><b>${homeInventory.length}</b></div>${inventoryGrid(homeInventory)}</section>
 
       <section class="detail-section dossier-section" id="dossier-memory"><div class="section-label"><span>Recent memories</span><b>${detail.memories.length}</b></div><div class="memory-list">${detail.memories.slice(0, 16).map((memory) => `<article><span>${h(memory.kind)} | salience ${memory.salience}</span><p>${h(memory.content)}</p></article>`).join("") || `<div class="empty-state">No retained memories yet.</div>`}</div></section>
 

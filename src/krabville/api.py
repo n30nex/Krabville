@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .commerce_v2 import item_asset_index
 from .config import Settings
 from .content import LOCATION_POINTS
 from .db import connect, dumps, initialize, loads, now_iso, transaction
@@ -388,7 +389,7 @@ def _resident_detail_v2(
         {
             "name": item["name"], "category": item["category"],
             "quantity": float(item["quantity"]), "condition": int(item["condition_score"]),
-            "assetKey": item["asset_key"], "assetIndex": (int(item["item_id"]) - 1) % 182,
+            "assetKey": item["asset_key"], "assetIndex": item_asset_index(str(item["asset_key"])),
         }
         for item in connection.execute(
             """
@@ -399,6 +400,7 @@ def _resident_detail_v2(
             (resident_id,),
         )
     ]
+    clothing = [item for item in on_person if item["category"] in {"clothing", "accessories"}]
     household = connection.execute(
         "SELECT household_id FROM household_members WHERE resident_id=? AND ended_season_id IS NULL",
         (resident_id,),
@@ -407,7 +409,7 @@ def _resident_detail_v2(
         {
             "name": item["name"], "category": item["category"],
             "quantity": float(item["quantity"]), "condition": int(item["condition_score"]),
-            "assetKey": item["asset_key"], "assetIndex": (int(item["item_id"]) - 1) % 182,
+            "assetKey": item["asset_key"], "assetIndex": item_asset_index(str(item["asset_key"])),
         }
         for item in connection.execute(
             """
@@ -500,6 +502,7 @@ def _resident_detail_v2(
             "active": bool(phone["active"]),
         } if phone else None),
         "communications": calls,
+        "clothing": clothing,
         "onPersonInventory": on_person,
         "homeInventory": home_inventory,
         "transactions": transactions,
@@ -626,8 +629,13 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "x": float(point[0]) if point else None, "y": float(point[1]) if point else None,
             "business": dict(business) if business else None,
         })
-    personal_accounts = [int(row[0]) for row in connection.execute("SELECT id FROM financial_accounts WHERE resident_id IS NOT NULL AND status='open'")]
-    total_cash_cents = sum(account_balance(connection, account_id) for account_id in personal_accounts)
+    cash_accounts = [
+        int(row[0])
+        for row in connection.execute(
+            "SELECT id FROM financial_accounts WHERE status='open' AND account_type IN ('cash','chequing','savings','business')"
+        )
+    ]
+    total_cash_cents = sum(account_balance(connection, account_id) for account_id in cash_accounts)
     total_debt_cents = int(connection.execute("SELECT COALESCE(SUM(outstanding_cents),0) FROM debts WHERE status IN ('current','late','defaulted')").fetchone()[0])
     total_investments_cents = int(connection.execute("SELECT COALESCE(SUM(market_value_cents),0) FROM investments").fetchone()[0])
     business_rows = []
@@ -640,10 +648,12 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         ).fetchone()
         sales = connection.execute(
             """
-            SELECT COALESCE(SUM(e.amount_cents),0) FROM transaction_entries e
+            SELECT COALESCE(SUM(CASE WHEN e.amount_cents>0 THEN e.amount_cents ELSE 0 END),0)
+            FROM transaction_entries e
             JOIN financial_transactions t ON t.id=e.transaction_id
             JOIN financial_accounts a ON a.id=e.account_id
-            WHERE a.business_id=? AND t.season_id=? AND t.category='retail_purchase'
+            WHERE a.business_id=? AND t.season_id=?
+              AND t.category IN ('retail_purchase','daily_settlement','wholesale_restock')
             """,
             (business["id"], season_id),
         ).fetchone()[0]
@@ -667,8 +677,22 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "sales": int(sales) / 100,
         })
     resident_net_worth = []
-    for resident in connection.execute("SELECT id FROM residents"):
-        accounts = [int(row[0]) for row in connection.execute("SELECT id FROM financial_accounts WHERE resident_id=? AND status='open'", (resident["id"],))]
+    for resident in connection.execute(
+        """
+        SELECT r.id FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.alive=1 AND l.current_stage IN ('teen','adult','senior')
+        """
+    ):
+        accounts = [
+            int(row[0])
+            for row in connection.execute(
+                """
+                SELECT id FROM financial_accounts WHERE resident_id=? AND status='open'
+                  AND account_type IN ('cash','chequing','savings')
+                """,
+                (resident["id"],),
+            )
+        ]
         liquid = sum(account_balance(connection, account_id) for account_id in accounts)
         investments = int(connection.execute(
             "SELECT COALESCE(SUM(i.market_value_cents),0) FROM investments i JOIN financial_accounts a ON a.id=i.account_id WHERE a.resident_id=?",
@@ -706,7 +730,7 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             SELECT s.number season_number,fs.day,SUM(fs.cash_cents) cash,SUM(fs.debt_cents) debt,
               SUM(fs.investments_cents) investments,SUM(fs.net_worth_cents) net_worth
             FROM financial_snapshots fs JOIN seasons s ON s.id=fs.season_id
-            WHERE fs.owner_kind='resident' GROUP BY fs.season_id,fs.day ORDER BY s.number,fs.day LIMIT 140
+            GROUP BY fs.season_id,fs.day ORDER BY s.number,fs.day LIMIT 140
             """
         )
     ]
@@ -801,11 +825,37 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
         for row in connection.execute(
             """
             SELECT day,AVG(average_price_cents) average_price,SUM(units_sold) units_sold
-            FROM price_history WHERE season_id=? GROUP BY day ORDER BY day
+            FROM price_history WHERE season_id=? AND units_sold>0 GROUP BY day ORDER BY day
             """,
             (season_id,),
         )
     ]
+    transaction_stats = connection.execute(
+        """
+        SELECT COUNT(DISTINCT t.id) transactions,
+          COALESCE(SUM(ABS(e.amount_cents)),0)/2 volume
+        FROM financial_transactions t LEFT JOIN transaction_entries e ON e.transaction_id=t.id
+        WHERE t.season_id=? AND t.status='posted'
+        """,
+        (season_id,),
+    ).fetchone()
+    service_revenue = int(connection.execute(
+        """
+        SELECT COALESCE(SUM(CASE WHEN e.amount_cents>0 THEN e.amount_cents ELSE 0 END),0)
+        FROM financial_transactions t JOIN transaction_entries e ON e.transaction_id=t.id
+        JOIN financial_accounts a ON a.id=e.account_id
+        WHERE t.season_id=? AND t.status='posted' AND a.business_id IS NOT NULL
+          AND e.memo LIKE '%service:%'
+        """,
+        (season_id,),
+    ).fetchone()[0])
+    goods_sold = float(connection.execute(
+        """
+        SELECT COALESCE(SUM(quantity),0) FROM inventory_movements
+        WHERE season_id=? AND movement_type='purchase'
+        """,
+        (season_id,),
+    ).fetchone()[0])
     return {
         "world": {
             "width": 3072, "height": 2048, "coordinateSpace": "legacy",
@@ -849,6 +899,11 @@ def _town_v2(connection: sqlite3.Connection, season_id: int) -> dict[str, Any]:
             "stockUnits": float(connection.execute("SELECT COALESCE(SUM(quantity),0) FROM business_inventory").fetchone()[0]),
             "barters": int(connection.execute("SELECT COUNT(*) FROM barter_transactions WHERE season_id=?", (season_id,)).fetchone()[0]),
             "phoneCalls": int(connection.execute("SELECT COUNT(*) FROM communications WHERE season_id=?", (season_id,)).fetchone()[0]),
+            "transactionCount": int(transaction_stats["transactions"] or 0),
+            "transactionVolume": int(transaction_stats["volume"] or 0) / 100,
+            "businessRevenue": sum(float(business["sales"] or 0) for business in business_rows),
+            "serviceRevenue": service_revenue / 100,
+            "goodsSold": goods_sold,
         },
         "seasonSummaries": [
             {
@@ -1082,7 +1137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         yield
 
-    app = FastAPI(title="Krabville Public API", version="2.0.1", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="Krabville Public API", version="2.0.2", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["krab.canadaverse.org", "127.0.0.1", "localhost", "testserver"],
@@ -1288,7 +1343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "name": row["name"], "category": row["category"],
                         "quantity": float(row["quantity"]), "price": int(row["price_cents"]) / 100,
                         "lowStock": float(row["quantity"]) <= float(row["reorder_point"]),
-                        "assetKey": row["asset_key"], "assetIndex": (int(row["item_id"]) - 1) % 182,
+                        "assetKey": row["asset_key"], "assetIndex": item_asset_index(str(row["asset_key"])),
                     }
                     for row in connection.execute(
                         """
@@ -1322,7 +1377,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     {
                         "name": row["name"], "category": row["category"],
                         "quantity": float(row["quantity"]), "assetKey": row["asset_key"],
-                        "assetIndex": (int(row["item_id"]) - 1) % 182,
+                        "assetIndex": item_asset_index(str(row["asset_key"])),
                     }
                     for row in connection.execute(
                         """

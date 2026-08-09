@@ -43,7 +43,7 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
         assert stocked_property["inventoryUnits"] > 0
         property_detail = client.get(f"/api/v3/properties/{stocked_property['slug']}")
         assert property_detail.status_code == 200
-        assert all(0 <= item["assetIndex"] < 182 for item in property_detail.json()["inventory"])
+        assert all(0 <= item["assetIndex"] < 196 for item in property_detail.json()["inventory"])
         assert modern["residents"][0]["needsHighIsGood"] is True
         assert modern["residents"][0]["lifeStage"] in {"baby", "child", "teen", "adult", "senior"}
         detail = client.get(f"/api/v3/residents/{modern['residents'][0]['slug']}")

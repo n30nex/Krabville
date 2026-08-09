@@ -41,9 +41,12 @@ model lane is delayed or unavailable.
 - **Lifecycle:** residents progress through baby, child, teen, adult, and senior
   stages. Adult life lasts four seasons and senior life lasts two. Minors are
   protected from mortality; rare non-graphic adult mortality can occur.
-- **Economy:** wages, cash, bank balances, investments, expenses, property,
-  childcare, debt, and interest settle once per day at 04:00 in-world time
-  through balanced ledger entries.
+- **Economy:** employers fund wages while food, housing, utilities, transport,
+  communication, dining, entertainment, health care, repairs, education,
+  childcare, and community spending reach real town businesses through
+  balanced ledger entries. Residents shop for and use goods according to their
+  unmet needs; stock, prices, debt, investment returns, bartering, startups,
+  closures, theft, and scams keep the economy moving.
 - **Relationships and drama:** affinity, trust, familiarity, and tension evolve
   through friendship, romance, jealousy, gossip, rivalry, betrayal, illness,
   accidents, breakups, marriage, children, adoption, and inheritance. Content
@@ -95,7 +98,8 @@ new model work, and the inference worker makes no calls after Season 20 locks.
 The desktop and mobile UI provides a pannable and zoomable town, minimap,
 four-season animated weather and day/night lighting, 25 uniquely mapped live
 interiors with moving resident sprites, exterior place cards, RPG-style goods
-inventories, resident dossiers, needs, predicted actions, families, property,
+inventories with 388 searchable goods and semantic item minis, resident outfit
+and clothing views, dossiers, needs, predicted actions, families, property,
 finances, beliefs, relationship graphs, conversations, map-native voting,
 story ledgers, a comprehensive Analytics Lab, model usage, and season archives.
 

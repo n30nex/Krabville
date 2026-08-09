@@ -8,6 +8,8 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Any
 
+from .db import dumps, loads
+
 
 def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -131,7 +133,445 @@ CATALOG: tuple[tuple[Any, ...], ...] = tuple(sum([
         ("Herb seedlings", 699), ("Flower bulbs", 899), ("Fertilizer", 1299),
         ("Pruning shears", 2999),
     ], durability=65, need="purpose", restore=8),
+    _goods("fresh food", "grocery", [
+        ("Grapes", 599), ("Strawberries", 649), ("Cherries", 699),
+        ("Watermelon", 899), ("Lemons", 449), ("Limes", 449), ("Corn", 499),
+        ("Bell peppers", 599), ("Broccoli", 499), ("Garlic", 349),
+        ("Onions", 399), ("Cabbage", 499), ("Cucumbers", 399),
+        ("Beef steak", 1599), ("Bacon", 899), ("Fruit jam", 699),
+        ("Honey", 899), ("Bagels", 599),
+    ], consumable=True, perish_days=4, need="hunger", restore=14),
+    _goods("snacks", "cafe", [
+        ("Potato chips", 449), ("Chocolate bar", 349), ("Cookies", 499),
+        ("Cake slice", 599), ("Granola bars", 649), ("Trail mix", 799),
+        ("Soda", 299), ("Ice cream tub", 699), ("Popcorn", 399),
+    ], consumable=True, perish_days=20, need="fun", restore=8),
+    _goods("prepared food", "cafe", [
+        ("Cafe latte", 499), ("Burger", 1199), ("Pizza", 1699),
+        ("Sushi tray", 1899), ("Donuts", 699), ("French fries", 599),
+        ("Ice cream cone", 499),
+    ], consumable=True, perish_days=1, need="hunger", restore=18),
+    _goods("furnishings", "general", [
+        ("Dining chair", 6999), ("Side table", 8999), ("Bed frame", 24999),
+        ("Wardrobe", 21999), ("Sofa", 34999), ("Floor lamp", 7999),
+        ("Dresser", 18999), ("Houseplant", 2999), ("Picture frame", 2499),
+        ("Standing mirror", 9999), ("Wall clock", 3999), ("Area rug", 12999),
+        ("Candle", 899), ("Camping lantern", 4999), ("Broom", 2499),
+        ("Mop", 2999), ("Bucket", 1999), ("Plunger", 1499),
+        ("Tissue box", 399), ("Garbage can", 3999),
+    ], durability=85, need="comfort", restore=10),
+    _goods("accessories", "outfitter", [
+        ("Scarf", 2499), ("Baseball cap", 2499), ("Sun hat", 2999),
+        ("Shorts", 3499), ("Underwear", 1999), ("Necktie", 2999),
+        ("Leather belt", 3999), ("Wristwatch", 7999), ("Ring", 12999),
+        ("Necklace", 14999), ("Briefcase", 8999), ("Wallet", 3999),
+        ("Rain boots", 7999), ("Sunglasses", 4999), ("Handbag", 8999),
+    ], durability=78, need="comfort", restore=6),
+    _goods("outdoors", "outfitter", [
+        ("Compass", 2499), ("Multi-tool", 4999), ("Cooler", 6999),
+        ("Camp frying pan", 3499), ("Tool box", 7999),
+    ], durability=88, need="safety", restore=8),
+    _goods("electronics", "electronics", [
+        ("Home stereo", 24999), ("Walkie-talkie", 7999),
+    ], durability=86, need="fun", restore=10),
+    _goods("hobby", "hobby", [
+        ("Basketball", 2999), ("Baseball set", 3499), ("Skateboard", 6999),
+        ("Art palette", 2499), ("Crayon box", 999),
+    ], durability=72, need="fun", restore=14),
+    _goods("fresh food", "grocery", [
+        ("Pears", 499), ("Blueberries", 649), ("Raspberries", 649),
+        ("Peaches", 599), ("Plums", 549), ("Avocados", 699),
+        ("Spinach", 449), ("Cauliflower", 599), ("Zucchini", 449),
+        ("Celery", 399), ("Green beans", 499), ("Ground beef", 1199),
+        ("Pork chops", 1299), ("Sausages", 999), ("Cream", 549),
+    ], consumable=True, perish_days=4, need="hunger", restore=14),
+    _goods("pantry", "grocery", [
+        ("Lentils", 499), ("Chickpeas", 399), ("Quinoa", 899),
+        ("Noodles", 399), ("Macaroni", 449), ("Brown sugar", 499),
+        ("Maple syrup", 1299), ("Mustard", 399), ("Ketchup", 499),
+        ("Mayonnaise", 599), ("Vinegar", 449), ("Salt", 299),
+        ("Black pepper", 499), ("Canned tuna", 349), ("Canned corn", 299),
+        ("Herbal tea", 849),
+    ], consumable=True, perish_days=45, need="hunger", restore=10),
+    _goods("hygiene", "pharmacy", [
+        ("Conditioner", 799), ("Body wash", 699), ("Dental floss", 399),
+        ("Mouthwash", 749), ("Hair brush", 899), ("Cotton swabs", 349),
+        ("Sunscreen", 1099), ("Insect repellent", 999),
+        ("Nail clippers", 599), ("Shaving cream", 649),
+    ], consumable=True, perish_days=90, need="hygiene", restore=16),
+    _goods("household", "general", [
+        ("Vacuum cleaner", 12999), ("Clothes iron", 4999),
+        ("Ironing board", 5999), ("Food containers", 2499),
+        ("Mixing bowls", 2999), ("Frying pan", 3999),
+        ("Saucepan", 4499), ("Baking tray", 2999),
+        ("Coffee maker", 6999), ("Toaster", 4999),
+        ("Microwave", 14999), ("Electric fan", 5999),
+        ("Space heater", 8999), ("Curtains", 6999),
+        ("Bed sheets", 4999), ("Duvet", 8999),
+    ], durability=84, need="comfort", restore=9),
+    _goods("clothing", "outfitter", [
+        ("T-shirt", 1999), ("Dress shirt", 3999), ("Hoodie", 4999),
+        ("Trousers", 4999), ("Sweatpants", 3999), ("Skirt", 4499),
+        ("Summer dress", 6999), ("Pajamas", 3999), ("Swimsuit", 4499),
+        ("Work boots", 11999), ("Slippers", 2999), ("Mittens", 2499),
+        ("Rain pants", 5999), ("Thermal underwear", 3999),
+        ("Blazer", 8999), ("Overalls", 6999), ("Apron", 2499),
+        ("House robe", 4999), ("Sandals", 3999), ("Dress shoes", 8999),
+    ], durability=76, need="comfort", restore=7),
+    _goods("accessories", "outfitter", [
+        ("Earrings", 4999), ("Bracelet", 5999), ("Hair ties", 799),
+        ("Tote bag", 2999), ("Lunch bag", 2499), ("Card holder", 1999),
+        ("Key ring", 999), ("Reading glasses", 5999),
+    ], durability=78, need="comfort", restore=5),
+    _goods("electronics", "electronics", [
+        ("Smart speaker", 11999), ("Wi-Fi router", 9999),
+        ("Printer", 19999), ("E-reader", 14999),
+        ("Handheld game", 19999), ("Game console", 49999),
+        ("Video game", 7999), ("Baby monitor", 12999),
+    ], durability=86, need="fun", restore=10),
+    _goods("books", "books", [
+        ("Comic book", 999), ("Magazine", 799), ("Poetry book", 1799),
+        ("Mystery novel", 1899), ("Romance novel", 1899),
+        ("Science book", 2499), ("Puzzle book", 1299),
+        ("Music book", 1999),
+    ], durability=72, need="fun", restore=11),
+    _goods("hobby", "hobby", [
+        ("Playing cards", 999), ("Vinyl record", 2999),
+        ("Knitting needles", 1499), ("Drum", 15999),
+        ("Music keyboard", 24999), ("Microphone", 8999),
+        ("Yoga mat", 3499), ("Dumbbells", 5999),
+        ("Jump rope", 1499), ("Frisbee", 1499), ("Kite", 2499),
+        ("Badminton set", 4999), ("Jigsaw puzzle", 2499),
+        ("Clay set", 1999), ("Embroidery kit", 2499),
+    ], durability=72, need="fun", restore=14),
+    _goods("childcare", "school", [
+        ("Crib", 24999), ("High chair", 12999), ("Pacifier", 599),
+        ("Changing mat", 2999), ("Toddler cup", 899),
+        ("Board book", 1299), ("Pencil case", 1499),
+        ("Calculator", 2499), ("Art smock", 1999),
+        ("Building bricks", 3999),
+    ], durability=72, need="care", restore=8),
 ], []))
+
+
+# Atlas positions are semantic, not catalog order. Several goods intentionally share the
+# closest recognizable mini when the generated pack has no exact object.
+ITEM_ASSET_INDEX = {
+    "apples": 0,
+    "bananas": 1,
+    "carrots": 11,
+    "potatoes": 12,
+    "tomatoes": 13,
+    "lettuce": 19,
+    "bread-loaf": 21,
+    "milk": 22,
+    "eggs": 23,
+    "cheddar": 24,
+    "chicken": 28,
+    "tofu": 24,
+    "fresh-fish": 26,
+    "yogurt": 25,
+    "butter": 50,
+    "berries": 5,
+    "oranges": 2,
+    "mushrooms": 18,
+    "soup-kit": 62,
+    "salad-kit": 63,
+    "rice": 34,
+    "pasta": 40,
+    "oats": 39,
+    "flour": 34,
+    "sugar": 34,
+    "coffee": 56,
+    "tea": 58,
+    "canned-beans": 41,
+    "canned-soup": 42,
+    "cooking-oil": 44,
+    "peanut-butter": 32,
+    "crackers": 54,
+    "cereal": 38,
+    "tomato-sauce": 47,
+    "spices": 49,
+    "emergency-ration": 38,
+    "hot-breakfast": 39,
+    "lunch-special": 65,
+    "soup-and-bread": 62,
+    "coffee-cup": 57,
+    "tea-cup": 58,
+    "hot-chocolate": 57,
+    "sandwich": 59,
+    "fresh-pastry": 55,
+    "family-supper": 65,
+    "soap": 72,
+    "shampoo": 74,
+    "toothpaste": 71,
+    "toothbrush": 70,
+    "deodorant": 75,
+    "laundry-detergent": 100,
+    "dish-soap": 99,
+    "toilet-paper": 76,
+    "sanitary-supplies": 79,
+    "razor-pack": 78,
+    "hand-sanitizer": 81,
+    "skin-lotion": 73,
+    "first-aid-kit": 87,
+    "pain-reliever": 85,
+    "cold-medicine": 86,
+    "allergy-medicine": 96,
+    "bandages": 88,
+    "thermometer": 90,
+    "vitamin-bottle": 97,
+    "heat-pack": 89,
+    "ice-pack": 92,
+    "prescription-refill": 91,
+    "light-bulbs": 107,
+    "batteries": 110,
+    "garbage-bags": 102,
+    "paper-towels": 101,
+    "cleaning-spray": 74,
+    "sponge-pack": 98,
+    "storage-bin": 119,
+    "blanket": 155,
+    "pillow": 114,
+    "towel-set": 124,
+    "cookware-set": 163,
+    "dinnerware-set": 65,
+    "kettle": 57,
+    "desk-lamp": 117,
+    "extension-cord": 111,
+    "work-shirt": 131,
+    "jeans": 132,
+    "rain-jacket": 131,
+    "winter-coat": 129,
+    "warm-sweater": 130,
+    "boots": 134,
+    "running-shoes": 133,
+    "socks": 151,
+    "gloves": 128,
+    "wool-hat": 126,
+    "backpack": 138,
+    "school-uniform": 130,
+    "baby-clothes": 152,
+    "formal-outfit": 144,
+    "umbrella": 136,
+    "flashlight": 157,
+    "water-bottle": 161,
+    "camping-stove": 162,
+    "sleeping-bag": 155,
+    "tent": 154,
+    "fishing-rod": 164,
+    "life-jacket": 152,
+    "binoculars": 158,
+    "bicycle-helmet": 140,
+    "tool-pouch": 166,
+    "trail-map": 159,
+    "hammer": 168,
+    "screwdriver-set": 169,
+    "pliers": 171,
+    "wrench-set": 170,
+    "nails": 174,
+    "screws": 175,
+    "duct-tape": 173,
+    "wood-glue": 99,
+    "paint-tin": 187,
+    "lumber-bundle": 172,
+    "rope": 111,
+    "padlock": 170,
+    "multimeter": 176,
+    "soldering-iron": 169,
+    "repair-parts": 166,
+    "lagoon-phone": 178,
+    "phone-charger": 110,
+    "headphones": 153,
+    "tablet": 183,
+    "laptop": 149,
+    "portable-radio": 177,
+    "alarm-clock": 123,
+    "camera": 179,
+    "usb-drive": 110,
+    "power-bank": 110,
+    "desk-computer": 177,
+    "television": 177,
+    "novel": 182,
+    "cookbook": 183,
+    "repair-manual": 183,
+    "school-workbook": 183,
+    "picture-book": 182,
+    "town-history": 182,
+    "field-guide": 183,
+    "notebook": 185,
+    "sketchbook": 185,
+    "pen-set": 184,
+    "board-game": 185,
+    "puzzle": 187,
+    "paint-set": 186,
+    "yarn-bundle": 111,
+    "guitar": 177,
+    "garden-seeds": 119,
+    "model-boat-kit": 160,
+    "chess-set": 185,
+    "soccer-ball": 189,
+    "tennis-racket": 191,
+    "baking-kit": 55,
+    "fishing-tackle": 166,
+    "craft-paper": 185,
+    "sewing-kit": 171,
+    "diapers": 79,
+    "baby-formula": 22,
+    "baby-bottle": 22,
+    "stroller": 112,
+    "child-car-seat": 112,
+    "toy-blocks": 186,
+    "stuffed-toy": 125,
+    "lunch-box": 167,
+    "school-supplies": 186,
+    "bicycle": 192,
+    "teen-transit-pass": 183,
+    "science-kit": 166,
+    "potting-soil": 34,
+    "compost": 42,
+    "plant-pot": 120,
+    "garden-shovel": 168,
+    "watering-can": 105,
+    "tomato-seedlings": 119,
+    "herb-seedlings": 120,
+    "flower-bulbs": 107,
+    "fertilizer": 34,
+    "pruning-shears": 171,
+    "grapes": 3,
+    "strawberries": 4,
+    "cherries": 6,
+    "watermelon": 7,
+    "lemons": 8,
+    "limes": 9,
+    "corn": 10,
+    "bell-peppers": 14,
+    "broccoli": 15,
+    "garlic": 16,
+    "onions": 17,
+    "cabbage": 19,
+    "cucumbers": 20,
+    "beef-steak": 29,
+    "bacon": 30,
+    "fruit-jam": 31,
+    "honey": 33,
+    "bagels": 37,
+    "potato-chips": 52,
+    "chocolate-bar": 53,
+    "cookies": 54,
+    "cake-slice": 55,
+    "granola-bars": 40,
+    "trail-mix": 38,
+    "soda": 67,
+    "ice-cream-tub": 69,
+    "popcorn": 38,
+    "cafe-latte": 57,
+    "burger": 60,
+    "pizza": 61,
+    "sushi-tray": 64,
+    "donuts": 66,
+    "french-fries": 68,
+    "ice-cream-cone": 69,
+    "dining-chair": 112,
+    "side-table": 113,
+    "bed-frame": 114,
+    "wardrobe": 115,
+    "sofa": 116,
+    "floor-lamp": 117,
+    "dresser": 118,
+    "houseplant": 120,
+    "picture-frame": 121,
+    "standing-mirror": 122,
+    "wall-clock": 123,
+    "area-rug": 124,
+    "candle": 108,
+    "camping-lantern": 109,
+    "broom": 103,
+    "mop": 104,
+    "bucket": 105,
+    "plunger": 106,
+    "tissue-box": 77,
+    "garbage-can": 102,
+    "scarf": 127,
+    "baseball-cap": 140,
+    "sun-hat": 141,
+    "shorts": 142,
+    "underwear": 143,
+    "necktie": 144,
+    "leather-belt": 145,
+    "wristwatch": 146,
+    "ring": 147,
+    "necklace": 148,
+    "briefcase": 149,
+    "wallet": 150,
+    "rain-boots": 135,
+    "sunglasses": 137,
+    "handbag": 139,
+    "compass": 159,
+    "multi-tool": 160,
+    "cooler": 167,
+    "camp-frying-pan": 163,
+    "tool-box": 166,
+    "home-stereo": 177,
+    "walkie-talkie": 178,
+    "basketball": 188,
+    "baseball-set": 190,
+    "skateboard": 192,
+    "art-palette": 187,
+    "crayon-box": 186,
+}
+
+ITEM_ASSET_ALIASES = {
+    "pears": "apples", "blueberries": "berries", "raspberries": "berries",
+    "peaches": "oranges", "plums": "cherries", "avocados": "limes",
+    "spinach": "lettuce", "cauliflower": "broccoli", "zucchini": "cucumbers",
+    "celery": "cucumbers", "green-beans": "broccoli",
+    "ground-beef": "beef-steak", "pork-chops": "beef-steak", "sausages": "bacon",
+    "cream": "milk", "lentils": "rice", "chickpeas": "canned-beans",
+    "quinoa": "oats", "noodles": "pasta", "macaroni": "pasta",
+    "brown-sugar": "sugar", "maple-syrup": "honey", "mustard": "tomato-sauce",
+    "ketchup": "tomato-sauce", "mayonnaise": "yogurt", "vinegar": "cooking-oil",
+    "salt": "spices", "black-pepper": "spices", "canned-tuna": "canned-soup",
+    "canned-corn": "canned-beans", "herbal-tea": "tea",
+    "conditioner": "shampoo", "body-wash": "soap", "dental-floss": "toothbrush",
+    "mouthwash": "toothpaste", "hair-brush": "toothbrush", "cotton-swabs": "bandages",
+    "sunscreen": "skin-lotion", "insect-repellent": "cleaning-spray",
+    "nail-clippers": "pruning-shears", "shaving-cream": "skin-lotion",
+    "vacuum-cleaner": "broom", "clothes-iron": "kettle", "ironing-board": "side-table",
+    "food-containers": "storage-bin", "mixing-bowls": "dinnerware-set",
+    "frying-pan": "camp-frying-pan", "saucepan": "cookware-set", "baking-tray": "cookware-set",
+    "coffee-maker": "kettle", "toaster": "camping-stove", "microwave": "camping-stove",
+    "electric-fan": "floor-lamp", "space-heater": "camping-stove", "curtains": "blanket",
+    "bed-sheets": "blanket", "duvet": "blanket", "t-shirt": "work-shirt",
+    "dress-shirt": "work-shirt", "hoodie": "warm-sweater", "trousers": "jeans",
+    "sweatpants": "jeans", "skirt": "shorts", "summer-dress": "formal-outfit",
+    "pajamas": "baby-clothes", "swimsuit": "shorts", "work-boots": "boots",
+    "slippers": "running-shoes", "mittens": "gloves", "rain-pants": "jeans",
+    "thermal-underwear": "underwear", "blazer": "formal-outfit", "overalls": "work-shirt",
+    "apron": "work-shirt", "house-robe": "warm-sweater", "sandals": "running-shoes",
+    "dress-shoes": "boots", "earrings": "ring", "bracelet": "wristwatch",
+    "hair-ties": "necklace", "tote-bag": "handbag", "lunch-bag": "cooler",
+    "card-holder": "wallet", "key-ring": "ring", "reading-glasses": "sunglasses",
+    "smart-speaker": "home-stereo", "wi-fi-router": "portable-radio", "printer": "desk-computer",
+    "e-reader": "tablet", "handheld-game": "lagoon-phone", "game-console": "television",
+    "video-game": "usb-drive", "baby-monitor": "walkie-talkie", "comic-book": "picture-book",
+    "magazine": "picture-book", "poetry-book": "novel", "mystery-novel": "novel",
+    "romance-novel": "novel", "science-book": "field-guide", "puzzle-book": "school-workbook",
+    "music-book": "notebook", "playing-cards": "board-game", "vinyl-record": "home-stereo",
+    "knitting-needles": "sewing-kit", "drum": "guitar", "music-keyboard": "guitar",
+    "microphone": "walkie-talkie", "yoga-mat": "area-rug", "dumbbells": "multi-tool",
+    "jump-rope": "rope", "frisbee": "basketball", "kite": "toy-blocks",
+    "badminton-set": "tennis-racket", "jigsaw-puzzle": "puzzle", "clay-set": "paint-set",
+    "embroidery-kit": "sewing-kit", "crib": "bed-frame", "high-chair": "dining-chair",
+    "pacifier": "baby-bottle", "changing-mat": "blanket", "toddler-cup": "baby-bottle",
+    "board-book": "picture-book", "pencil-case": "school-supplies", "calculator": "science-kit",
+    "art-smock": "school-uniform", "building-bricks": "toy-blocks",
+}
+ITEM_ASSET_INDEX.update({sku: ITEM_ASSET_INDEX[source] for sku, source in ITEM_ASSET_ALIASES.items()})
+
+
+def item_asset_index(asset_key: str) -> int:
+    return ITEM_ASSET_INDEX.get(asset_key, 195)
 
 
 INTERIOR_VARIANTS = {
@@ -341,6 +781,27 @@ def seed_commerce(connection: sqlite3.Connection) -> None:
                     "INSERT OR IGNORE INTO resident_inventory(resident_id,item_id,quantity,acquired_tick) VALUES(?,?,1,0)",
                     (phone["resident_id"], item["id"]),
                 )
+    for resident in connection.execute(
+        """
+        SELECT r.id,l.current_stage FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.alive=1 ORDER BY r.id
+        """
+    ):
+        stage = str(resident["current_stage"])
+        wardrobe = (
+            ("baby-clothes", "blanket", "stuffed-toy")
+            if stage == "baby"
+            else ("school-uniform", "warm-sweater", "socks", "running-shoes", "rain-jacket", "backpack")
+            if stage == "child"
+            else ("work-shirt", "jeans", "socks", "running-shoes", "rain-jacket", "winter-coat", "backpack")
+        )
+        for sku in wardrobe:
+            item = connection.execute("SELECT id FROM item_catalog WHERE sku=?", (sku,)).fetchone()
+            if item:
+                connection.execute(
+                    "INSERT OR IGNORE INTO resident_inventory(resident_id,item_id,quantity,acquired_tick) VALUES(?,?,1,0)",
+                    (resident["id"], item["id"]),
+                )
 
 
 def _post_purchase(
@@ -531,7 +992,7 @@ def _consume_home_stock(connection: sqlite3.Connection, season_id: int, tick: in
             """
             SELECT hi.item_id,hi.quantity,i.name FROM household_inventory hi
             JOIN item_catalog i ON i.id=hi.item_id
-            WHERE hi.household_id=? AND i.category IN ('fresh food','pantry','prepared food') AND hi.quantity>0
+            WHERE hi.household_id=? AND i.category IN ('fresh food','pantry','prepared food','snacks') AND hi.quantity>0
             ORDER BY i.perish_days,hi.acquired_tick,i.id
             """,
             (household["id"],),
@@ -564,7 +1025,14 @@ def _shopping_requirements(connection: sqlite3.Connection, household_id: int, se
         "SELECT COUNT(*) FROM household_members WHERE household_id=? AND ended_season_id IS NULL",
         (household_id,),
     ).fetchone()[0])
-    requirements = [("fresh food", max(4, members * 3)), ("pantry", max(5, members * 2)), ("hygiene", 3), ("household", 2)]
+    requirements = [
+        ("fresh food", max(4, members * 3)),
+        ("pantry", max(5, members * 2)),
+        ("snacks", max(2, members)),
+        ("hygiene", 3),
+        ("household", 2),
+        ("furnishings", 2),
+    ]
     if connection.execute(
         """
         SELECT 1 FROM household_members hm JOIN resident_lifecycle l ON l.resident_id=hm.resident_id
@@ -594,6 +1062,181 @@ def _shopping_requirements(connection: sqlite3.Connection, household_id: int, se
         if stock < target:
             missing.append(category)
     return missing
+
+
+PERSONAL_NEED_CATEGORIES = {
+    "hunger": ("prepared food", "snacks"),
+    "hygiene": ("hygiene",),
+    "health": ("medicine",),
+    "comfort": ("clothing", "accessories", "household"),
+    "safety": ("outdoors", "hardware"),
+    "fun": ("hobby", "books", "electronics", "snacks"),
+    "social": ("hobby", "accessories", "prepared food"),
+    "belonging": ("hobby", "books", "accessories"),
+    "privacy": ("electronics", "books", "outdoors"),
+    "purpose": ("books", "hobby", "garden", "hardware"),
+    "autonomy": ("electronics", "outdoors", "accessories"),
+}
+
+PERSONAL_CATEGORY_TARGETS = {
+    "clothing": 7,
+    "accessories": 3,
+    "electronics": 3,
+    "books": 3,
+    "hobby": 3,
+    "outdoors": 2,
+    "hardware": 2,
+    "garden": 2,
+}
+
+
+def _use_personal_goods(connection: sqlite3.Connection, season_id: int, tick: int) -> int:
+    """Use one useful owned item per resident and feed its benefit back into needs."""
+
+    used = 0
+    for resident in connection.execute(
+        """
+        SELECT r.id FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+        ORDER BY r.id
+        """
+    ):
+        need = connection.execute(
+            """
+            SELECT need_key,satisfaction FROM resident_needs
+            WHERE season_id=? AND resident_id=? AND need_key NOT IN ('energy','financial_security')
+            ORDER BY satisfaction,need_key LIMIT 1
+            """,
+            (season_id, resident["id"]),
+        ).fetchone()
+        if not need or int(need["satisfaction"]) >= 82:
+            continue
+        item = connection.execute(
+            """
+            SELECT i.id,i.name,i.need_key,i.need_restore,i.consumable,ri.quantity,ri.condition_score
+            FROM resident_inventory ri JOIN item_catalog i ON i.id=ri.item_id
+            WHERE ri.resident_id=? AND ri.quantity>0 AND i.need_key=? AND i.need_restore>0
+            ORDER BY i.consumable DESC,i.need_restore DESC,ri.acquired_tick,i.id LIMIT 1
+            """,
+            (resident["id"], need["need_key"]),
+        ).fetchone()
+        if not item:
+            continue
+        restored = min(100, int(need["satisfaction"]) + int(item["need_restore"]))
+        connection.execute(
+            """
+            UPDATE resident_needs SET satisfaction=?,trend=?,updated_tick=?
+            WHERE season_id=? AND resident_id=? AND need_key=?
+            """,
+            (restored, restored - int(need["satisfaction"]), tick, season_id, resident["id"], need["need_key"]),
+        )
+        state = connection.execute(
+            "SELECT needs_json FROM resident_state WHERE season_id=? AND resident_id=?",
+            (season_id, resident["id"]),
+        ).fetchone()
+        if state:
+            needs = loads(state["needs_json"], {})
+            needs[str(need["need_key"])] = restored
+            connection.execute(
+                "UPDATE resident_state SET needs_json=? WHERE season_id=? AND resident_id=?",
+                (dumps(needs), season_id, resident["id"]),
+            )
+        if int(item["consumable"]):
+            connection.execute(
+                "UPDATE resident_inventory SET quantity=MAX(0,quantity-1) WHERE resident_id=? AND item_id=?",
+                (resident["id"], item["id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO inventory_movements(
+                  season_id,tick,item_id,quantity,movement_type,from_kind,from_id,to_kind,note,created_at
+                ) VALUES(?,?,?,1,'consume','resident',?,'waste',?,?)
+                """,
+                (season_id, tick, item["id"], resident["id"], f"Used {item['name']} for {need['need_key']}", _now()),
+            )
+        else:
+            connection.execute(
+                "UPDATE resident_inventory SET condition_score=MAX(1,condition_score-1) WHERE resident_id=? AND item_id=?",
+                (resident["id"], item["id"]),
+            )
+        used += 1
+    return used
+
+
+def _shop_for_personal_needs(
+    connection: sqlite3.Connection, season_id: int, day: int, tick: int
+) -> int:
+    purchases = 0
+    placeholders = ",".join("?" for _ in PERSONAL_NEED_CATEGORIES)
+    for resident in connection.execute(
+        """
+        SELECT r.id,a.id account_id FROM residents r
+        JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+          AND l.current_stage IN ('teen','adult','senior')
+        JOIN financial_accounts a ON a.resident_id=r.id
+          AND a.name='Personal chequing' AND a.status='open'
+        ORDER BY r.id
+        """
+    ):
+        needs = list(connection.execute(
+            f"""
+            SELECT need_key,satisfaction FROM resident_needs
+            WHERE season_id=? AND resident_id=? AND need_key IN ({placeholders})
+            ORDER BY satisfaction,need_key
+            """,
+            (season_id, resident["id"], *PERSONAL_NEED_CATEGORIES),
+        ))
+        if not needs:
+            continue
+        lowest = int(needs[0]["satisfaction"])
+        chooser = _rng(season_id, day, resident["id"], "personal-shopping")
+        if chooser.random() > min(0.92, 0.28 + (100 - lowest) / 100):
+            continue
+        balance = _account_balance(connection, int(resident["account_id"]))
+        spendable = max(0, balance - 25_000)
+        if spendable < 299:
+            continue
+        bought = False
+        for need in needs[:5]:
+            for category in PERSONAL_NEED_CATEGORIES.get(str(need["need_key"]), ()):
+                target = PERSONAL_CATEGORY_TARGETS.get(category)
+                if target is not None:
+                    owned = float(connection.execute(
+                        """
+                        SELECT COALESCE(SUM(ri.quantity),0) FROM resident_inventory ri
+                        JOIN item_catalog i ON i.id=ri.item_id
+                        WHERE ri.resident_id=? AND i.category=? AND ri.quantity>0
+                        """,
+                        (resident["id"], category),
+                    ).fetchone()[0])
+                    if owned >= target:
+                        continue
+                options = list(connection.execute(
+                    """
+                    SELECT i.*,bi.business_id,bi.price_cents,bi.quantity FROM item_catalog i
+                    JOIN business_inventory bi ON bi.item_id=i.id
+                    WHERE i.category=? AND bi.quantity>=1 AND bi.price_cents<=?
+                      AND (i.consumable=1 OR NOT EXISTS (
+                        SELECT 1 FROM resident_inventory ri
+                        WHERE ri.resident_id=? AND ri.item_id=i.id AND ri.quantity>0
+                      ))
+                    ORDER BY bi.price_cents,i.id
+                    """,
+                    (category, min(spendable, max(2_500, balance // 8)), resident["id"]),
+                ))
+                if not options:
+                    continue
+                item = options[chooser.randrange(min(5, len(options)))]
+                if _post_purchase(
+                    connection, season_id, tick, day, int(resident["account_id"]),
+                    int(item["business_id"]), item, int(item["price_cents"]),
+                    "resident", int(resident["id"]), 100 + purchases,
+                ):
+                    purchases += 1
+                    bought = True
+                    break
+            if bought:
+                break
+    return purchases
 
 
 def _shop(connection: sqlite3.Connection, season_id: int, day: int, tick: int) -> tuple[int, list[tuple[int, str]]]:
@@ -637,6 +1280,7 @@ def _shop(connection: sqlite3.Connection, season_id: int, day: int, tick: int) -
                 int(item["price_cents"]), "household", int(household["id"]), sequence,
             ):
                 purchases += 1
+    purchases += _shop_for_personal_needs(connection, season_id, day, tick)
     return purchases, shortfalls
 
 
@@ -1491,6 +2135,7 @@ def run_daily_commerce(connection: sqlite3.Connection, season_id: int, day: int,
     seed_commerce(connection)
     inventory = _spoil_and_wear(connection, season_id, day, tick)
     consumed = _consume_home_stock(connection, season_id, tick)
+    used_items = _use_personal_goods(connection, season_id, tick)
     restocked = _restock(connection, season_id, day, tick)
     purchases, shortfalls = _shop(connection, season_id, day, tick)
     barters = _barter(connection, season_id, day, tick, shortfalls)
@@ -1514,6 +2159,7 @@ def run_daily_commerce(connection: sqlite3.Connection, season_id: int, day: int,
         )
     return {
         "consumed": consumed,
+        "usedItems": used_items,
         "restocked": restocked,
         "purchases": purchases,
         "barters": barters,
