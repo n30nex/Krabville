@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "krabville"
-version = "2.0.2"
+version = "2.0.3"
 description = "A persistent social simulation for Canadaverse"
 readme = "README.md"
 license = { text = "Apache-2.0" }
