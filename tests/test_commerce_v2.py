@@ -103,7 +103,7 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
             assert "clothing" in detail.json()
             assert detail.json()["clothing"]
             assert "homeInventory" in detail.json()
-            assert all(0 <= item["assetIndex"] < 196 for item in detail.json()["onPersonInventory"])
+            assert all(0 <= item["assetIndex"] < 452 for item in detail.json()["onPersonInventory"])
         dependent = next(resident for resident in payload["residents"] if resident["lifeStage"] in {"baby", "child"})
         assert dependent["care"]["state"] in {"covered", "institutional"}
         assert dependent["care"]["caregiver"]

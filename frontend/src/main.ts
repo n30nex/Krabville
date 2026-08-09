@@ -31,8 +31,27 @@ import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("app root missing");
 
-const INTERIOR_GRID_SIZE = 5;
-const INTERIOR_FRAME_COUNT = INTERIOR_GRID_SIZE * INTERIOR_GRID_SIZE;
+const INTERIOR_COLUMNS = 7;
+const INTERIOR_ROWS = 6;
+const INTERIOR_FRAME_COUNT = INTERIOR_COLUMNS * INTERIOR_ROWS;
+const INVENTORY_COLUMNS = 24;
+const INVENTORY_ROWS = 19;
+const INVENTORY_FRAME_COUNT = 452;
+const MAP_WIDTH = 4608;
+const MAP_HEIGHT = 3072;
+const LEGACY_MAP_WIDTH = 1774;
+const LEGACY_MAP_HEIGHT = 887;
+
+type ExteriorSeason = "spring" | "summer" | "fall" | "winter";
+
+function exteriorSeasonForNumber(number = 1): ExteriorSeason {
+  return (["spring", "summer", "fall", "winter"] as const)[Math.min(3, Math.max(0, Math.floor((number - 1) / 5)))]!;
+}
+
+function exteriorMapAsset(value = state): string {
+  const season = exteriorSeasonForNumber(value?.season?.number ?? 1);
+  return value?.world?.mapAssets?.[season] ?? `/assets/kvsim-town-v21-${season}.webp`;
+}
 
 app.innerHTML = `
   <div class="shell">
@@ -278,8 +297,9 @@ async function ensureWorld(): Promise<import("./game").LagoonWorld> {
 
 function renderTop(value: KrabvilleState): void {
   const season = value.season;
+  const population = value.analytics?.population;
   byId("season-clock").textContent = season
-    ? `Season ${season.number}  |  Day ${season.day + 1}  |  ${formatTime(season.worldMinutes)}`
+    ? `Season ${season.number}  |  ${titleCase(exteriorSeasonForNumber(season.number))}  |  Day ${season.day + 1}  |  ${formatTime(season.worldMinutes)}  |  ${population?.living ?? value.residents.length}/${population?.target ?? 24} residents`
     : "No season running";
   const live = byId("live-state");
   const status = season?.status ?? "ready";
@@ -373,27 +393,42 @@ function interiorFrame(location: string): number {
   if (/clinic|hospital|health/.test(name)) return 13;
   if (/school|college/.test(name)) return 12;
   if (/library/.test(name)) return 9;
-  if (/daycare|nursery|child|care service/.test(name)) return 24;
+  if (/daycare|nursery|child/.test(name)) return 29;
+  if (/care service/.test(name)) return 24;
   if (/bank|credit union/.test(name)) return 11;
+  if (/community hall|community room/.test(name)) return 40;
   if (/town hall|community|office/.test(name)) return 7;
-  if (/cafe|restaurant/.test(name)) return 6;
+  if (/bakery/.test(name)) return 30;
+  if (/restaurant/.test(name)) return 31;
+  if (/cinema/.test(name)) return 33;
+  if (/theatre/.test(name)) return 34;
+  if (/gym|fitness/.test(name)) return 35;
+  if (/arcade/.test(name)) return 36;
+  if (/electronics/.test(name)) return 37;
+  if (/hardware/.test(name)) return 38;
+  if (/laundry|laundromat/.test(name)) return 39;
+  if (/cafe/.test(name)) return 6;
   if (/workshop|boatworks|repair|radio/.test(name)) return 10;
   if (/pharmacy/.test(name)) return 17;
   if (/outfitter/.test(name)) return 19;
   if (/market|shop|store/.test(name)) return 14;
   if (/ferry/.test(name)) return 22;
   if (/shelter/.test(name)) return 20;
-  if (/bed|apartment|flat/.test(name)) return 23;
+  if (/bed|apartment|flat|co-op|tower/.test(name)) return 25;
   return /house|home|cottage/.test(name) ? 0 : 8;
 }
 
 function interiorPosition(frame: number): [number, number] {
   const normalized = ((frame % INTERIOR_FRAME_COUNT) + INTERIOR_FRAME_COUNT) % INTERIOR_FRAME_COUNT;
-  const step = 100 / (INTERIOR_GRID_SIZE - 1);
-  return [(normalized % INTERIOR_GRID_SIZE) * step, Math.floor(normalized / INTERIOR_GRID_SIZE) * step];
+  return [
+    (normalized % INTERIOR_COLUMNS) * (100 / (INTERIOR_COLUMNS - 1)),
+    Math.floor(normalized / INTERIOR_COLUMNS) * (100 / (INTERIOR_ROWS - 1)),
+  ];
 }
 
 type InteriorResident = { slug: string; name: string; activity: string; mood?: string };
+
+type InteriorZone = { key: string; x: number; y: number };
 
 const LIFE_STAGE_SPRITE_ROWS: Record<string, number> = { baby: 0, child: 1, teen: 2, senior: 3 };
 
@@ -401,6 +436,16 @@ function stableHash(value: string): number {
   let hash = 2166136261;
   for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
   return hash >>> 0;
+}
+
+function interiorZone(activity: string): InteriorZone {
+  if (/cook|meal|eat|bottle|breakfast|lunch|dinner/.test(activity)) return { key: "meal", x: 52, y: 65 };
+  if (/wash|bath|hygiene|shower/.test(activity)) return { key: "hygiene", x: 74, y: 61 };
+  if (/read|study|homework|lesson/.test(activity)) return { key: "study", x: 31, y: 59 };
+  if (/care|play|visit|talk|social|meeting/.test(activity)) return { key: "social", x: 47, y: 72 };
+  if (/work|shift|shop|stock|repair|build|write/.test(activity)) return { key: "work", x: 64, y: 64 };
+  if (/sleep|nap|rest|bed/.test(activity)) return { key: "rest", x: 50, y: 58 };
+  return { key: "idle", x: 40, y: 69 };
 }
 
 function interiorActorMarkup(occupants: InteriorResident[], sceneKey: string): string {
@@ -416,17 +461,15 @@ function interiorActorMarkup(occupants: InteriorResident[], sceneKey: string): s
     const rowPosition = row * (100 / (rowCount - 1));
     const activity = occupant.activity.toLowerCase();
     const resting = /sleep|nap|rest|bed/.test(activity);
-    const zone: [number, number] = /cook|meal|eat|bottle|breakfast|lunch|dinner/.test(activity) ? [52, 65]
-      : /wash|bath|hygiene|shower/.test(activity) ? [74, 61]
-        : /read|study|homework|lesson/.test(activity) ? [31, 59]
-          : /care|play|visit|talk|social|meeting/.test(activity) ? [47, 72]
-            : /work|shift|shop|stock|repair|build|write/.test(activity) ? [64, 64]
-              : resting ? [72, 55] : [40, 69];
+    const zone = interiorZone(activity);
+    const peerIndex = occupants.slice(0, index).filter((peer) => interiorZone(peer.activity.toLowerCase()).key === zone.key).length;
+    const slots: ReadonlyArray<readonly [number, number]> = [[0, 0], [-20, 0], [20, 0], [-14, 14], [14, 14], [-28, 16], [28, 16], [0, 22]];
+    const [slotX, slotY] = slots[peerIndex % slots.length] ?? [0, 0];
     const hash = stableHash(`${sceneKey}:${occupant.slug}`);
-    const spreadX = ((hash % 17) - 8) + (index % 3) * 7;
-    const spreadY = (((hash >>> 5) % 11) - 5) + Math.floor(index / 3) * 6;
-    const left = Math.max(19, Math.min(81, zone[0] + spreadX));
-    const top = Math.max(43, Math.min(80, zone[1] + spreadY));
+    const jitterX = (hash % 5) - 2;
+    const jitterY = ((hash >>> 5) % 5) - 2;
+    const left = Math.max(17, Math.min(83, zone.x + slotX + jitterX));
+    const top = Math.max(42, Math.min(82, zone.y + slotY + jitterY));
     const walkX = ((hash >>> 9) % 2 ? 1 : -1) * (14 + (hash % 13));
     const walkY = ((hash >>> 12) % 2 ? 1 : -1) * (4 + (hash % 8));
     const duration = 5 + (hash % 5);
@@ -725,11 +768,14 @@ function renderAnalytics(value: KrabvilleState): string {
   const economy = value.economy;
   const history = economy?.history ?? [];
   const relationships = value.analytics?.relationships;
+  const population = value.analytics?.population;
+  const housing = value.analytics?.housing;
   const modelSeries = Object.entries(value.usage.models).map(([model, usage]) => ({ label: shortModel(model), value: usage.tokens }));
   return `<div class="analytics-hero"><div><span>Krabville Analytics Lab</span><h3>Town pulse at Day ${(value.season?.day ?? 0) + 1}, ${formatTime(value.season?.worldMinutes ?? 0)}</h3><p>Live social, wellbeing, economy, inventory, activity, and model measurements from the public simulation ledger.</p></div><div class="analytics-live"><i></i><b>${value.season?.status ?? "ready"}</b><span>updated ${new Date(value.updatedAt).toLocaleTimeString()}</span></div></div>
-    <div class="analytics-kpis"><article><span>Residents</span><b>${value.residents.length}</b><small>${stageCounts.map((item) => `${item.value} ${item.label.toLowerCase()}`).join(" | ")}</small></article><article><span>Town net worth</span><b>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</b><small>${formatCad(economy?.totalDebt)} debt</small></article><article><span>Goods in shops</span><b>${Math.round(economy?.stockUnits ?? 0).toLocaleString()}</b><small>${economy?.catalogItems ?? 0} catalog items</small></article><article><span>Social activity</span><b>${relationships?.interactions ?? 0}</b><small>${relationships?.pairs ?? 0} relationship pairs</small></article><article><span>Story events</span><b>${value.townEvents?.length ?? value.events.length}</b><small>${value.conversations.length} conversations</small></article><article><span>Model calls</span><b>${value.usage.calls}</b><small>${value.usage.totalTokens.toLocaleString()} tokens</small></article></div>
+    <div class="analytics-kpis"><article><span>Population plan</span><b>${population?.living ?? value.residents.length} / ${population?.target ?? 24}</b><small>${stageCounts.map((item) => `${item.value} ${item.label.toLowerCase()}`).join(" | ")}</small></article><article><span>Town growth</span><b>+${(population?.births ?? 0) + (population?.arrivals ?? 0)}</b><small>${population?.births ?? 0} births | ${population?.arrivals ?? 0} arrivals | ${population?.deaths ?? 0} deaths</small></article><article><span>Housing</span><b>${housing?.residents ?? value.residents.length} / ${housing?.capacity ?? 0}</b><small>${housing?.available ?? 0} spaces | ${housing?.activeLeases ?? 0} households</small></article><article><span>Apartments</span><b>${housing?.apartmentResidents ?? 0} / ${housing?.apartmentCapacity ?? 0}</b><small>${housing?.apartments ?? 0} buildings | ${housing?.sharedBuildings ?? 0} shared</small></article><article><span>Town net worth</span><b>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</b><small>${formatCad(economy?.totalDebt)} debt</small></article><article><span>Goods in shops</span><b>${Math.round(economy?.stockUnits ?? 0).toLocaleString()}</b><small>${economy?.catalogItems ?? 0} catalog items</small></article><article><span>Social activity</span><b>${relationships?.interactions ?? 0}</b><small>${relationships?.pairs ?? 0} relationship pairs</small></article><article><span>Story events</span><b>${value.townEvents?.length ?? value.events.length}</b><small>${value.conversations.length} conversations</small></article><article><span>Model calls</span><b>${value.usage.calls}</b><small>${value.usage.totalTokens.toLocaleString()} tokens</small></article></div>
     <div class="analytics-grid">
       <section><header><span>Population</span><b>Life stages</b></header>${barChart(stageCounts)}</section>
+      <section><header><span>Housing</span><b>Occupied and available capacity</b></header>${barChart([{ label: "Residents", value: housing?.residents ?? value.residents.length }, { label: "Available", value: housing?.available ?? 0 }, { label: "Apartment residents", value: housing?.apartmentResidents ?? 0 }, { label: "Apartment spaces", value: Math.max(0, (housing?.apartmentCapacity ?? 0) - (housing?.apartmentResidents ?? 0)) }])}</section>
       <section><header><span>Wellbeing</span><b>Average need satisfaction</b></header>${barChart(needs, (number) => `${Math.round(number)}%`)}</section>
       <section><header><span>Mood</span><b>Residents now</b></header>${barChart(moodCounts)}</section>
       <section><header><span>Occupancy</span><b>Where everyone is</b></header>${barChart(locations)}</section>
@@ -745,9 +791,9 @@ function renderAnalytics(value: KrabvilleState): string {
 function inventoryGrid(items: InventoryItem[]): string {
   if (!items.length) return `<div class="empty-state">No goods recorded here.</div>`;
   return `<div class="inventory-grid">${items.map((item) => {
-    const index = Math.abs(item.assetIndex ?? stableHash(item.assetKey ?? item.name)) % 196;
-    const x = (index % 14) * (100 / 13);
-    const y = Math.floor(index / 14) * (100 / 13);
+    const index = Math.abs(item.assetIndex ?? stableHash(item.assetKey ?? item.name)) % INVENTORY_FRAME_COUNT;
+    const x = (index % INVENTORY_COLUMNS) * (100 / (INVENTORY_COLUMNS - 1));
+    const y = Math.floor(index / INVENTORY_COLUMNS) * (100 / (INVENTORY_ROWS - 1));
     return `<article data-inventory-name="${h(item.name.toLowerCase())}" data-inventory-category="${h(item.category)}"><span class="item-icon" data-item="${h(item.assetKey ?? "item")}" style="--item-x:${x}%;--item-y:${y}%" role="img" aria-label="${h(item.name)}"></span><div><b>${h(item.name)}</b><small>${h(item.category)}${item.condition !== undefined ? ` | ${item.condition}% condition` : ""}</small></div><em>${item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}${item.price !== undefined ? ` | ${formatCad(item.price)}` : ""}</em></article>`;
   }).join("")}</div>`;
 }
@@ -758,44 +804,17 @@ function inventoryTools(items: InventoryItem[]): string {
   return `<div class="inventory-tools"><label><span>Find an item</span><input type="search" data-inventory-search placeholder="Search ${items.length} items" autocomplete="off" /></label><label><span>Category</span><select data-inventory-category><option value="">All ${categories.length} categories</option>${categories.map((category) => `<option value="${h(category)}">${h(titleCase(category))}</option>`).join("")}</select></label><b data-inventory-visible>${items.length} shown</b></div>`;
 }
 
-const PROPERTY_EXTERIOR_POINTS: Record<string, [number, number]> = {
-  "home-cedar-cottage": [576, 144],
-  "home-tidepool-house": [2384, 160],
-  "home-maple-row": [1360, 184],
-  "home-north-dock-flat": [2160, 960],
-  "home-harbour-family": [2448, 1744],
-  "home-garden-family": [288, 912],
-  "home-canal-family": [2704, 704],
-  "home-lighthouse-single": [1696, 400],
-  "home-market-single": [560, 736],
-  "home-willow-single": [824, 592],
-  "property-business-blue-kettle-cafe": [1040, 992],
-  "property-business-community-house": [1456, 720],
-  "property-business-harbour-library": [1328, 1136],
-  "property-business-krabville-credit-union": [1872, 1040],
-  "property-business-krabville-school": [2400, 1280],
-  "property-business-lagoon-field-lab": [1040, 712],
-  "property-business-lagoon-health-centre": [2008, 736],
-  "property-business-signal-house": [488, 384],
-  "property-business-tideway-gardens": [2896, 1312],
-  "property-lagoon-general-store": [2416, 960],
-  "property-harbour-pharmacy": [2384, 728],
-  "property-tideway-outfitters": [832, 1360],
-  "property-lagoon-ferry": [1488, 1680],
-  "harbour-shelter": [2160, 960],
-  "property-venture-s1-d0-30": [2080, 1216],
-};
-
 function buildingThumbnail(property: NonNullable<KrabvilleState["properties"]>[number] | undefined): string {
   if (!property || typeof property.x !== "number" || typeof property.y !== "number" || !Number.isFinite(property.x) || !Number.isFinite(property.y)) return `<div class="building-thumb fallback" role="img" aria-label="Building exterior unavailable"><span aria-hidden="true">KV</span></div>`;
-  const [centerX, centerY] = PROPERTY_EXTERIOR_POINTS[property.slug ?? ""] ?? [property.x, property.y];
-  const cropWidth = 480;
-  const cropHeight = 270;
-  const left = Math.max(0, Math.min(3072 - cropWidth, centerX - cropWidth / 2));
-  const top = Math.max(0, Math.min(2048 - cropHeight, centerY - cropHeight / 2));
-  const x = (100 * left) / (3072 - cropWidth);
-  const y = (100 * top) / (2048 - cropHeight);
-  return `<div class="building-thumb" style="--building-x:${x}%;--building-y:${y}%" role="img" aria-label="${h(property.name)} exterior"></div>`;
+  const centerX = property.x * MAP_WIDTH / LEGACY_MAP_WIDTH;
+  const centerY = property.y * MAP_HEIGHT / LEGACY_MAP_HEIGHT;
+  const cropWidth = 720;
+  const cropHeight = 405;
+  const left = Math.max(0, Math.min(MAP_WIDTH - cropWidth, centerX - cropWidth / 2));
+  const top = Math.max(0, Math.min(MAP_HEIGHT - cropHeight, centerY - cropHeight / 2));
+  const x = (100 * left) / (MAP_WIDTH - cropWidth);
+  const y = (100 * top) / (MAP_HEIGHT - cropHeight);
+  return `<div class="building-thumb" style="--building-map:url('${h(exteriorMapAsset())}');--building-x:${x}%;--building-y:${y}%" role="img" aria-label="${h(property.name)} exterior"></div>`;
 }
 
 function directoryProperties(kind: "homes" | "buildings" | "places"): string {
@@ -807,7 +826,7 @@ function directoryProperties(kind: "homes" | "buildings" | "places"): string {
       ${buildingThumbnail(property)}
       <span class="card-state ${h(property.status ?? "active")}">${h(property.type ?? "place")} | ${h(property.status ?? "active")}</span>
       <h3>${h(property.name)}</h3><p>${h(property.address ?? property.mapLocation ?? "Krabville")}</p>
-      <div class="card-totals"><span><b>${property.inside?.length ?? 0}</b> inside</span><span><b>${property.inventoryItems ?? 0}</b> items</span><span><b>${Math.round(property.inventoryUnits ?? 0)}</b> units</span></div>
+      <div class="card-totals"><span><b>${property.occupants?.length ?? 0}/${property.capacity ?? 0}</b> residents</span><span><b>${property.householdCount ?? 0}</b> households</span><span><b>${property.inventoryItems ?? 0}</b> items</span><span><b>${Math.round(property.inventoryUnits ?? 0)}</b> units</span></div>
       <div class="occupancy-line"><span>${h(occupantNames(property))}</span></div>
       <footer><span>${formatCad(property.value)}</span><em>${property.condition ?? 100}% condition</em></footer>
     </button>`).join("") || `<div class="empty-state large">No matching properties.</div>`}</div>`;
@@ -896,7 +915,7 @@ async function openProperty(slug: string, pushHistory = true): Promise<void> {
     const inventoryCategories = new Set(detail.inventory.map((item) => item.category)).size;
     const lowStockItems = detail.inventory.filter((item) => item.lowStock).length;
     byId("explore-title").textContent = detail.name;
-    content.innerHTML = `<div class="building-detail-head"><div><span>${h(detail.type)} | ${h(detail.status)}</span><h3>${h(detail.name)}</h3><p>${h(detail.address)} | ${detail.condition}% condition | ${formatCad(detail.value)}</p></div><button data-focus-place="${h(detail.mapLocation)}">Show on map</button></div>
+    content.innerHTML = `<div class="building-detail-head"><div><span>${h(detail.type)} | ${h(detail.status)}</span><h3>${h(detail.name)}</h3><p>${h(detail.address)} | ${detail.residents.length}/${detail.capacity} residents | ${detail.householdCount} households | ${detail.condition}% condition | ${formatCad(detail.value)}</p></div><button data-focus-place="${h(detail.mapLocation)}">Show on map</button></div>
       <div class="building-detail-grid"><div class="property-interior" style="--interior-x:${x}%;--interior-y:${y}%" role="group" aria-label="${h(detail.name)} live interior">${interiorActorMarkup(detail.residents, detail.slug)}</div><section><div class="section-label"><span>Inside now</span><b data-inside-count>${detail.residents.length}</b></div><div class="inside-list">${insideListMarkup(detail.residents)}</div></section></div>
       <div class="inventory-summary"><article><span>Unique items</span><b>${detail.inventory.length}</b></article><article><span>Total units</span><b>${inventoryUnits.toLocaleString(undefined, { maximumFractionDigits: 1 })}</b></article><article><span>Categories</span><b>${inventoryCategories}</b></article><article><span>Low stock</span><b>${lowStockItems}</b></article></div>
       <div class="section-label"><span>${detail.business ? "Shop stock" : "Home inventory"}</span><b>${detail.inventory.length}</b></div>${inventoryTools(detail.inventory)}${inventoryGrid(detail.inventory)}
@@ -1252,6 +1271,7 @@ byId("map-home").addEventListener("click", () => {
   hideInterior();
   byId<HTMLElement>("archive-view").hidden = true;
   closeExplorer();
+  world?.fit();
 });
 
 document.addEventListener("keydown", (event) => {

@@ -26,10 +26,12 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
         assert v3.status_code == 200
         modern = v3.json()
         assert modern["schemaVersion"] == 3
-        assert modern["world"]["mapAsset"] == "/assets/kvsim-town-v2.webp"
-        assert modern["world"]["interiorsAsset"] == "/assets/interiors-v3.png"
+        assert modern["world"]["mapAsset"] == "/assets/kvsim-town-v21-spring.webp"
+        assert set(modern["world"]["mapAssets"]) == {"spring", "summer", "fall", "winter"}
+        assert modern["world"]["interiorsAsset"] == "/assets/interiors-v4.png"
         assert modern["world"]["weatherAsset"] == "/assets/weather-seasons-v1.png"
-        assert modern["world"]["inventoryAsset"] == "/assets/inventory-items-v1.png"
+        assert modern["world"]["inventoryAsset"] == "/assets/inventory-items-v2.png"
+        assert modern["world"]["eventAsset"] == "/assets/event-props-v21.png"
         future_homes = [item for item in modern["properties"] if item["slug"] in {
             "home-cedar-cottage", "home-tidepool-house", "home-maple-row", "home-north-dock-flat"
         }]
@@ -43,7 +45,12 @@ def test_public_state_hides_seed_until_completion(settings_factory) -> None:
         assert stocked_property["inventoryUnits"] > 0
         property_detail = client.get(f"/api/v3/properties/{stocked_property['slug']}")
         assert property_detail.status_code == 200
-        assert all(0 <= item["assetIndex"] < 196 for item in property_detail.json()["inventory"])
+        property_payload = property_detail.json()
+        assert all(0 <= item["assetIndex"] < 452 for item in property_payload["inventory"])
+        assert property_payload["capacity"] >= len(property_payload["residents"])
+        assert modern["analytics"]["population"]["living"] == 12
+        assert modern["analytics"]["population"]["target"] == 13
+        assert modern["analytics"]["housing"]["capacity"] >= 32
         assert modern["residents"][0]["needsHighIsGood"] is True
         assert modern["residents"][0]["lifeStage"] in {"baby", "child", "teen", "adult", "senior"}
         detail = client.get(f"/api/v3/residents/{modern['residents'][0]['slug']}")

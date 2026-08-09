@@ -67,6 +67,8 @@ export interface PropertySummary {
   y?: number;
   interiorAvailable?: boolean;
   interiorVariant?: number;
+  capacity?: number;
+  householdCount?: number;
   business?: { id?: number; slug?: string; name?: string; status?: string } | null;
   inventoryItems?: number;
   inventoryUnits?: number;
@@ -212,9 +214,11 @@ export interface KrabvilleState {
     height?: number;
     coordinateSpace?: "legacy" | "map";
     mapAsset?: string;
+    mapAssets?: Record<"spring" | "summer" | "fall" | "winter", string>;
     interiorsAsset?: string;
     weatherAsset?: string;
     inventoryAsset?: string;
+    eventAsset?: string;
   };
   season: null | {
     id: number;
@@ -328,6 +332,15 @@ export interface KrabvilleState {
     inventoryByCategory?: Array<{ category: string; units: number; items: number }>;
     movements?: Array<{ type: string; units: number; events: number }>;
     prices?: Array<{ day: number; averagePrice: number; unitsSold: number }>;
+    population?: {
+      living: number; target: number; stages: Record<string, number>; births: number;
+      arrivals: number; deaths: number; activeHouseholds: number;
+    };
+    housing?: {
+      residents: number; capacity: number; available: number; properties: number;
+      activeLeases: number; apartments: number; apartmentResidents: number;
+      apartmentCapacity: number; sharedBuildings: number;
+    };
   };
   townEvents?: LedgerEntry[];
   seasonSummaries?: Array<{ id: number; number: number; status: string; headline?: string; progressPercent?: number }>;
@@ -365,6 +378,8 @@ export interface PropertyDetail {
   condition: number;
   value: number;
   interiorVariant: number;
+  capacity: number;
+  householdCount: number;
   residents: Array<{ slug: string; name: string; activity: string; mood: string }>;
   households: Array<{ id: number; name: string }>;
   business: null | Record<string, unknown>;

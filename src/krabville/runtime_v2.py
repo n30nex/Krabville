@@ -421,8 +421,10 @@ def apply_lifecycle_boundary(connection: sqlite3.Connection, season_id: int, tic
     changes: list[dict[str, Any]] = []
     for row in connection.execute(
         """
-        SELECT r.id,r.slug,r.name,l.current_stage,l.seasons_in_stage,l.alive
+        SELECT r.id,r.slug,r.name,l.current_stage,l.seasons_in_stage,l.alive,
+          hm.household_id
         FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        LEFT JOIN household_members hm ON hm.resident_id=r.id AND hm.ended_season_id IS NULL
         WHERE l.alive=1 ORDER BY r.id
         """
     ):
@@ -491,28 +493,21 @@ def apply_lifecycle_boundary(connection: sqlite3.Connection, season_id: int, tic
                 (row["id"],),
             )
         elif next_stage == "adult" and stage != "adult":
-            job = connection.execute(
+            connection.execute(
                 """
-                SELECT j.id,j.title,j.hourly_wage_cents,b.name employer FROM jobs j
-                LEFT JOIN businesses b ON b.id=j.business_id WHERE j.active=1
-                ORDER BY ((j.id + ?) % 17),j.id LIMIT 1
+                UPDATE household_members SET role='head',legal_guardian=1,financially_responsible=1
+                WHERE resident_id=? AND ended_season_id IS NULL
                 """,
                 (row["id"],),
-            ).fetchone()
-            if job:
-                connection.execute(
-                    "UPDATE residents SET role=?,workplace=? WHERE id=?",
-                    (job["title"], WORK_LOCATIONS.get(str(job["employer"]), "Town Square"), row["id"]),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO employment(
-                      resident_id,job_id,status,hired_season_id,hired_tick,wage_cents,
-                      scheduled_minutes_per_day,performance
-                    ) VALUES(?,?,'active',?,?,?,450,50)
-                    """,
-                    (row["id"], job["id"], season_id, tick, job["hourly_wage_cents"]),
-                )
+            )
+            connection.execute(
+                """
+                UPDATE childcare_arrangements SET status='ended',ended_season_id=?,ended_tick=?
+                WHERE child_resident_id=? AND status='active'
+                """,
+                (season_id, tick, row["id"]),
+            )
+            _hire_resident(connection, int(row["id"]), season_id, tick)
         elif next_stage == "senior" and stage != "senior":
             connection.execute(
                 """
@@ -530,6 +525,13 @@ def apply_lifecycle_boundary(connection: sqlite3.Connection, season_id: int, tic
                 """
                 UPDATE employment SET status='terminated',ended_season_id=?,ended_tick=?,end_reason='death'
                 WHERE resident_id=? AND status IN ('active','leave','suspended')
+                """,
+                (season_id, tick, row["id"]),
+            )
+            connection.execute(
+                """
+                UPDATE childcare_arrangements SET status='ended',ended_season_id=?,ended_tick=?
+                WHERE caregiver_resident_id=? AND status='active'
                 """,
                 (season_id, tick, row["id"]),
             )
@@ -554,7 +556,193 @@ def apply_lifecycle_boundary(connection: sqlite3.Connection, season_id: int, tic
             changes.append({"resident": row["slug"], "from": stage, "to": next_stage})
             if not alive:
                 _settle_estate(connection, season_id, tick, int(row["id"]))
+                connection.execute(
+                    """
+                    UPDATE household_members SET ended_season_id=?,ended_tick=?,end_reason='death'
+                    WHERE resident_id=? AND ended_season_id IS NULL
+                    """,
+                    (season_id, tick, row["id"]),
+                )
+                if row["household_id"]:
+                    _release_empty_household(
+                        connection, season_id, tick, int(row["household_id"])
+                    )
     return changes
+
+
+def _hire_resident(
+    connection: sqlite3.Connection, resident_id: int, season_id: int, tick: int
+) -> bool:
+    if connection.execute(
+        "SELECT 1 FROM employment WHERE resident_id=? AND status IN ('active','leave','suspended')",
+        (resident_id,),
+    ).fetchone():
+        return True
+    job = connection.execute(
+        """
+        SELECT j.id,j.title,j.hourly_wage_cents,b.name employer,
+          COALESCE(NULLIF(p.map_location,''),p.name,b.name,'Town Square') workplace
+        FROM jobs j
+        LEFT JOIN businesses b ON b.id=j.business_id
+        LEFT JOIN properties p ON p.id=b.property_id
+        WHERE j.active=1 AND (
+          SELECT COUNT(*) FROM employment e
+          WHERE e.job_id=j.id AND e.status IN ('offered','active','leave','suspended')
+        ) < j.positions
+        ORDER BY ((j.id + ?) % 31),j.id LIMIT 1
+        """,
+        (resident_id,),
+    ).fetchone()
+    if not job:
+        connection.execute(
+            "UPDATE residents SET role='career seeker',workplace='Town Square' WHERE id=?",
+            (resident_id,),
+        )
+        return False
+    connection.execute(
+        "UPDATE residents SET role=?,workplace=? WHERE id=?",
+        (job["title"], job["workplace"], resident_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO employment(
+          resident_id,job_id,status,hired_season_id,hired_tick,wage_cents,
+          scheduled_minutes_per_day,performance
+        ) VALUES(?,?,'active',?,?,?,450,50)
+        """,
+        (resident_id, job["id"], season_id, tick, job["hourly_wage_cents"]),
+    )
+    return True
+
+
+def _release_empty_household(
+    connection: sqlite3.Connection, season_id: int, tick: int, household_id: int
+) -> None:
+    if connection.execute(
+        """
+        SELECT 1 FROM household_members hm JOIN resident_lifecycle l ON l.resident_id=hm.resident_id
+        WHERE hm.household_id=? AND hm.ended_season_id IS NULL AND l.alive=1 LIMIT 1
+        """,
+        (household_id,),
+    ).fetchone():
+        return
+    heir_household = connection.execute(
+        """
+        SELECT heir_home.household_id
+        FROM household_members former
+        JOIN family_links family ON family.resident_id=former.resident_id
+          AND family.ended_season_id IS NULL
+        JOIN resident_lifecycle heir_life ON heir_life.resident_id=family.relative_resident_id
+          AND heir_life.alive=1
+        JOIN household_members heir_home ON heir_home.resident_id=family.relative_resident_id
+          AND heir_home.ended_season_id IS NULL
+        WHERE former.household_id=?
+        ORDER BY CASE family.relation_type
+          WHEN 'child' THEN 0 WHEN 'spouse' THEN 1 WHEN 'partner' THEN 2 ELSE 3 END,
+          family.relative_resident_id LIMIT 1
+        """,
+        (household_id,),
+    ).fetchone()
+    heir_household_id = int(heir_household[0]) if heir_household else None
+    if heir_household_id and heir_household_id != household_id:
+        source_account = connection.execute(
+            "SELECT id FROM financial_accounts WHERE household_id=? AND name='Household chequing' AND status='open'",
+            (household_id,),
+        ).fetchone()
+        target_account = connection.execute(
+            "SELECT id FROM financial_accounts WHERE household_id=? AND name='Household chequing' AND status='open'",
+            (heir_household_id,),
+        ).fetchone()
+        if source_account and target_account:
+            amount = max(0, account_balance(connection, int(source_account[0])))
+            if amount:
+                transaction_id = int(connection.execute(
+                    """
+                    INSERT INTO financial_transactions(
+                      season_id,tick,category,description,status,external_key,created_at,posted_at
+                    ) VALUES(?,?,'inheritance','Household estate transfer','posted',?,?,?) RETURNING id
+                    """,
+                    (season_id, tick, f"household-estate:{household_id}:{season_id}", now_iso(), now_iso()),
+                ).fetchone()[0])
+                connection.executemany(
+                    "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
+                    (
+                        (transaction_id, source_account[0], -amount, "household estate transfer out"),
+                        (transaction_id, target_account[0], amount, "household estate received"),
+                    ),
+                )
+        for item in list(connection.execute(
+            "SELECT item_id,quantity,condition_score,acquired_tick,expires_tick FROM household_inventory WHERE household_id=? AND quantity>0",
+            (household_id,),
+        )):
+            connection.execute(
+                """
+                INSERT INTO household_inventory(
+                  household_id,item_id,quantity,condition_score,acquired_tick,expires_tick
+                ) VALUES(?,?,?,?,?,?)
+                ON CONFLICT(household_id,item_id) DO UPDATE SET
+                  quantity=quantity+excluded.quantity,
+                  condition_score=MAX(condition_score,excluded.condition_score),
+                  acquired_tick=MAX(acquired_tick,excluded.acquired_tick)
+                """,
+                (
+                    heir_household_id, item["item_id"], item["quantity"], item["condition_score"],
+                    item["acquired_tick"], item["expires_tick"],
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO inventory_movements(
+                  season_id,tick,item_id,quantity,movement_type,from_kind,from_id,to_kind,to_id,note,created_at
+                ) VALUES(?,?,?,?,'inherit','household',?,'household',?,'household estate',?)
+                """,
+                (
+                    season_id, tick, item["item_id"], item["quantity"], household_id,
+                    heir_household_id, now_iso(),
+                ),
+            )
+        connection.execute("DELETE FROM household_inventory WHERE household_id=?", (household_id,))
+        connection.execute(
+            """
+            UPDATE property_ownership SET household_id=?
+            WHERE household_id=? AND disposed_season_id IS NULL
+            """,
+            (heir_household_id, household_id),
+        )
+    occupancies = list(connection.execute(
+        "SELECT id,property_id FROM property_occupancy WHERE household_id=? AND ended_season_id IS NULL",
+        (household_id,),
+    ))
+    connection.execute(
+        """
+        UPDATE property_occupancy SET ended_season_id=?,ended_tick=?,end_reason='household dissolved'
+        WHERE household_id=? AND ended_season_id IS NULL
+        """,
+        (season_id, tick, household_id),
+    )
+    for occupancy in occupancies:
+        occupied = connection.execute(
+            "SELECT 1 FROM property_occupancy WHERE property_id=? AND ended_season_id IS NULL LIMIT 1",
+            (occupancy["property_id"],),
+        ).fetchone()
+        connection.execute(
+            "UPDATE properties SET status=? WHERE id=?",
+            ("occupied" if occupied else "available", occupancy["property_id"]),
+        )
+    connection.execute(
+        """
+        UPDATE households SET status='dissolved',dissolved_season_id=?,dissolved_tick=?
+        WHERE id=? AND status<>'dissolved'
+        """,
+        (season_id, tick, household_id),
+    )
+    connection.execute(
+        """
+        UPDATE financial_accounts SET status='closed',closed_season_id=?,closed_tick=?
+        WHERE household_id=? AND status='open'
+        """,
+        (season_id, tick, household_id),
+    )
 
 
 def _settle_estate(connection: sqlite3.Connection, season_id: int, tick: int, resident_id: int) -> None:
@@ -570,34 +758,130 @@ def _settle_estate(connection: sqlite3.Connection, season_id: int, tick: int, re
         """,
         (resident_id,),
     ).fetchone()
-    source = connection.execute(
-        "SELECT id FROM financial_accounts WHERE resident_id=? AND name='Personal chequing'",
-        (resident_id,),
-    ).fetchone()
+    heir_id = int(heir[0]) if heir else None
     target = connection.execute(
-        "SELECT id FROM financial_accounts WHERE resident_id=? AND name='Personal chequing'",
-        (int(heir[0]),),
-    ).fetchone() if heir else None
-    if not source or not target:
-        return
-    amount = max(0, account_balance(connection, int(source[0])))
-    if not amount:
-        return
-    transaction_id = int(connection.execute(
-        """
-        INSERT INTO financial_transactions(
-          season_id,tick,category,description,status,external_key,created_at,posted_at
-        ) VALUES(?,?,'inheritance','Estate inheritance','posted',?,?,?) RETURNING id
-        """,
-        (season_id, tick, f"estate:{resident_id}:{season_id}", now_iso(), now_iso()),
-    ).fetchone()[0])
+        "SELECT id FROM financial_accounts WHERE resident_id=? AND name='Personal chequing' AND status='open'",
+        (heir_id,),
+    ).fetchone() if heir_id else None
+    if target:
+        for source in connection.execute(
+            """
+            SELECT id FROM financial_accounts
+            WHERE resident_id=? AND status='open' AND account_type IN ('cash','chequing','savings')
+            ORDER BY id
+            """,
+            (resident_id,),
+        ):
+            if int(source["id"]) == int(target[0]):
+                continue
+            amount = max(0, account_balance(connection, int(source["id"])))
+            if not amount:
+                continue
+            transaction_id = int(connection.execute(
+                """
+                INSERT INTO financial_transactions(
+                  season_id,tick,category,description,status,external_key,created_at,posted_at
+                ) VALUES(?,?,'inheritance','Estate inheritance','posted',?,?,?) RETURNING id
+                """,
+                (
+                    season_id, tick, f"estate:{resident_id}:{source['id']}:{season_id}",
+                    now_iso(), now_iso(),
+                ),
+            ).fetchone()[0])
+            connection.executemany(
+                "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,?)",
+                (
+                    (transaction_id, source["id"], -amount, "estate transfer out"),
+                    (transaction_id, target[0], amount, "inheritance received"),
+                ),
+            )
+        target_investment = connection.execute(
+            "SELECT id FROM financial_accounts WHERE resident_id=? AND name='Investments'",
+            (heir_id,),
+        ).fetchone()
+        if not target_investment:
+            target_investment = connection.execute(
+                """
+                INSERT INTO financial_accounts(
+                  resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
+                ) VALUES(?,'Investments','investment',0,?,?) RETURNING id
+                """,
+                (heir_id, season_id, tick),
+            ).fetchone()
+        for investment in list(connection.execute(
+            """
+            SELECT i.* FROM investments i JOIN financial_accounts a ON a.id=i.account_id
+            WHERE a.resident_id=?
+            """,
+            (resident_id,),
+        )):
+            existing = connection.execute(
+                "SELECT id FROM investments WHERE account_id=? AND symbol=?",
+                (target_investment[0], investment["symbol"]),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    """
+                    UPDATE investments SET units=units+?,market_value_cents=market_value_cents+?,
+                      updated_season_id=?,updated_tick=? WHERE id=?
+                    """,
+                    (
+                        investment["units"], investment["market_value_cents"], season_id,
+                        tick, existing[0],
+                    ),
+                )
+                connection.execute("DELETE FROM investments WHERE id=?", (investment["id"],))
+            else:
+                connection.execute(
+                    "UPDATE investments SET account_id=?,updated_season_id=?,updated_tick=? WHERE id=?",
+                    (target_investment[0], season_id, tick, investment["id"]),
+                )
+        for item in list(connection.execute(
+            "SELECT item_id,quantity,condition_score,acquired_tick,expires_tick FROM resident_inventory WHERE resident_id=? AND quantity>0",
+            (resident_id,),
+        )):
+            connection.execute(
+                """
+                INSERT INTO resident_inventory(
+                  resident_id,item_id,quantity,condition_score,acquired_tick,expires_tick
+                ) VALUES(?,?,?,?,?,?)
+                ON CONFLICT(resident_id,item_id) DO UPDATE SET
+                  quantity=quantity+excluded.quantity,
+                  condition_score=MAX(condition_score,excluded.condition_score),
+                  acquired_tick=MAX(acquired_tick,excluded.acquired_tick)
+                """,
+                (
+                    heir_id, item["item_id"], item["quantity"], item["condition_score"],
+                    item["acquired_tick"], item["expires_tick"],
+                ),
+            )
+        connection.execute("DELETE FROM resident_inventory WHERE resident_id=?", (resident_id,))
+        connection.execute(
+            "UPDATE assets SET resident_id=? WHERE resident_id=? AND disposed_season_id IS NULL",
+            (heir_id, resident_id),
+        )
+    else:
+        connection.execute(
+            """
+            UPDATE investments SET units=0,market_value_cents=0,updated_season_id=?,updated_tick=?
+            WHERE account_id IN (SELECT id FROM financial_accounts WHERE resident_id=?)
+            """,
+            (season_id, tick, resident_id),
+        )
     connection.execute(
-        "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,'estate transfer out')",
-        (transaction_id, source[0], -amount),
+        """
+        UPDATE debts SET status='forgiven',outstanding_cents=0,closed_season_id=?,closed_tick=?
+        WHERE borrower_account_id IN (SELECT id FROM financial_accounts WHERE resident_id=?)
+          AND status IN ('current','late','defaulted')
+        """,
+        (season_id, tick, resident_id),
     )
     connection.execute(
-        "INSERT INTO transaction_entries(transaction_id,account_id,amount_cents,memo) VALUES(?,?,?,'inheritance received')",
-        (transaction_id, target[0], amount),
+        """
+        UPDATE financial_accounts SET status='closed',closed_season_id=?,closed_tick=?
+        WHERE resident_id=? AND status='open'
+        """,
+        (season_id, tick, resident_id),
     )
 
 
@@ -609,28 +893,55 @@ def add_next_generation(
     *,
     max_population: int = 32,
     max_adults: int = 24,
+    target_population: int | None = None,
+    max_births: int = 1,
 ) -> list[dict[str, Any]]:
     living = int(connection.execute(
         "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1"
     ).fetchone()[0])
     adults = list(connection.execute(
         """
-        SELECT r.*,i.family_name,i.appearance_key,l.current_stage,hm.household_id,h.slug household_slug
+        SELECT r.*,i.family_name,i.appearance_key,l.current_stage,hm.household_id,
+          h.slug household_slug,p.id property_id,p.resident_capacity,
+          (
+            SELECT COUNT(*) FROM property_occupancy occupied
+            JOIN household_members member ON member.household_id=occupied.household_id
+              AND member.ended_season_id IS NULL
+            JOIN resident_lifecycle life ON life.resident_id=member.resident_id AND life.alive=1
+            WHERE occupied.property_id=p.id AND occupied.ended_season_id IS NULL
+          ) property_residents,
+          (
+            SELECT COUNT(*) FROM family_links children
+            JOIN resident_lifecycle child_life ON child_life.resident_id=children.relative_resident_id
+              AND child_life.alive=1 AND child_life.current_stage IN ('baby','child','teen')
+            WHERE children.resident_id=r.id AND children.relation_type='child'
+              AND children.ended_season_id IS NULL
+          ) dependent_count
         FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
         JOIN resident_identities i ON i.resident_id=r.id
         JOIN household_members hm ON hm.resident_id=r.id AND hm.ended_season_id IS NULL
         JOIN households h ON h.id=hm.household_id
-        WHERE l.current_stage='adult' ORDER BY r.id
+        JOIN property_occupancy po ON po.household_id=h.id AND po.ended_season_id IS NULL
+        JOIN properties p ON p.id=po.property_id
+        WHERE l.current_stage='adult' AND p.resident_capacity>(
+          SELECT COUNT(*) FROM property_occupancy occupied
+          JOIN household_members member ON member.household_id=occupied.household_id
+            AND member.ended_season_id IS NULL
+          JOIN resident_lifecycle life ON life.resident_id=member.resident_id AND life.alive=1
+          WHERE occupied.property_id=p.id AND occupied.ended_season_id IS NULL
+        )
+        ORDER BY dependent_count,r.id
         """
     ))
     adult_count = int(connection.execute(
         "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1 AND current_stage IN ('adult','senior')"
     ).fetchone()[0])
-    if living >= max_population or adult_count >= max_adults or not adults:
+    target_population = min(max_population, target_population or max_population)
+    if living >= target_population or adult_count > max_adults or not adults or max_births <= 0:
         return []
-    target_births = 2 if living < 16 else 1 if living < 24 else 0
+    target_births = min(max_births, target_population - living)
     rng = _rng(seed_hex, "births", season_id)
-    rng.shuffle(adults)
+    adults.sort(key=lambda resident: (int(resident["dependent_count"]), rng.random()))
     names = ("Alex", "Bailey", "Cameron", "Dara", "Emery", "Finley", "Harper", "Indie", "Jules", "Kai", "Lane", "Marin", "Noel", "Parker", "River", "Shay", "Taylor", "Wren")
     births: list[dict[str, Any]] = []
     for index, parent in enumerate(adults[:target_births]):
@@ -756,6 +1067,508 @@ def add_next_generation(
         if living >= max_population:
             break
     return births
+
+
+_NEWCOMER_GIVEN_NAMES = (
+    "Ada", "Aiden", "Alina", "Andre", "Anika", "Beatrice", "Caleb", "Celine",
+    "Dalia", "Diego", "Eden", "Farah", "Felix", "Gia", "Hugo", "Ines",
+    "Jamal", "Keira", "Kenji", "Lina", "Malik", "Marta", "Nadia", "Nolan",
+    "Orla", "Paolo", "Ravi", "Rosa", "Sana", "Tomas", "Uma", "Yara",
+)
+_NEWCOMER_FAMILY_NAMES = (
+    "Abebe", "Bennett", "Chen", "Costa", "Dubois", "El-Amin", "Fernandes", "Gill",
+    "Hernandez", "Ito", "Johnson", "Kaur", "Laurent", "Mensah", "Novak", "Osborne",
+    "Patel", "Quinn", "Rossi", "Singh", "Turner", "Usman", "Vega", "Wong",
+)
+_NEWCOMER_COLORS = (
+    "#53b3cb", "#f4b942", "#e76f51", "#78c091", "#9b7ede", "#e56b9f",
+    "#4d908e", "#f9844a", "#90be6d", "#577590", "#f9c74f", "#43aa8b",
+)
+
+
+def population_target_for_season(season_number: int) -> int:
+    """Grow from 12 to 24 residents across the twenty-season campaign."""
+
+    bounded = max(0, min(20, int(season_number)))
+    return 12 + (12 * bounded + 19) // 20
+
+
+def _available_home(connection: sqlite3.Connection, residents_needed: int) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT p.*,
+          COUNT(DISTINCT CASE WHEN po.ended_season_id IS NULL THEN po.household_id END) active_households,
+          COUNT(DISTINCT CASE WHEN po.ended_season_id IS NULL AND hm.ended_season_id IS NULL
+            AND life.alive=1 THEN hm.resident_id END) active_residents
+        FROM properties p
+        LEFT JOIN property_occupancy po ON po.property_id=p.id AND po.ended_season_id IS NULL
+        LEFT JOIN household_members hm ON hm.household_id=po.household_id AND hm.ended_season_id IS NULL
+        LEFT JOIN resident_lifecycle life ON life.resident_id=hm.resident_id AND life.alive=1
+        WHERE p.property_type IN ('house','apartment')
+          AND p.status NOT IN ('planned','damaged','closed','demolished')
+        GROUP BY p.id
+        HAVING p.resident_capacity-active_residents>=?
+          AND (p.property_type='apartment' OR active_households=0)
+        ORDER BY CASE WHEN p.property_type='apartment' THEN 0 ELSE 1 END,
+          CASE WHEN active_households>0 THEN 0 ELSE 1 END,
+          p.resident_capacity-active_residents,p.id LIMIT 1
+        """,
+        (residents_needed,),
+    ).fetchone()
+
+
+def _unique_resident_slug(connection: sqlite3.Connection, given: str, family: str) -> str:
+    base = "-".join(f"{given}-{family}".casefold().replace("'", "").split())
+    slug = base
+    suffix = 2
+    while connection.execute("SELECT 1 FROM residents WHERE slug=?", (slug,)).fetchone():
+        slug, suffix = f"{base}-{suffix}", suffix + 1
+    return slug
+
+
+def _create_newcomer_resident(
+    connection: sqlite3.Connection,
+    *,
+    season_id: int,
+    tick: int,
+    seed_hex: str,
+    household_id: int,
+    home: str,
+    given: str,
+    family: str,
+    stage: str,
+    role: str,
+    ordinal: int,
+) -> dict[str, Any]:
+    rng = _rng(seed_hex, "newcomer", season_id, household_id, ordinal)
+    slug = _unique_resident_slug(connection, given, family)
+    name = f"{given} {family}"
+    traits = {
+        key: rng.randint(30, 86)
+        for key in (
+            "openness", "conscientiousness", "extraversion", "agreeableness",
+            "emotionalStability", "empathy", "ambition", "spontaneity",
+        )
+    }
+    appearance = {
+        "style": rng.choice(("practical", "casual", "artsy", "outdoorsy", "polished")),
+        "accentColor": _NEWCOMER_COLORS[(season_id + ordinal) % len(_NEWCOMER_COLORS)],
+        "skinTone": rng.choice(("deep", "tan", "medium", "olive", "light-medium", "light")),
+        "hairColor": rng.choice(("black", "dark brown", "brown", "auburn")),
+        "hairTexture": rng.choice(("straight", "wavy", "curly", "coils", "braided")),
+        "eyeColor": rng.choice(("brown", "hazel", "green", "blue")),
+    }
+    resident_role = {
+        "baby": "dependent", "child": "student", "teen": "secondary student",
+        "adult": "career seeker", "senior": "retired resident",
+    }[stage]
+    workplace = "Oak Hill College" if stage in {"child", "teen"} else home
+    created = now_iso()
+    resident_id = int(connection.execute(
+        """
+        INSERT INTO residents(
+          slug,name,role,home,workplace,color,traits_json,possessions_json,
+          routine,about,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id
+        """,
+        (
+            slug, name, resident_role, home, workplace, appearance["accentColor"],
+            dumps(traits), dumps(["phone", "house keys"] if stage in {"teen", "adult", "senior"} else ["family keepsake"]),
+            "Build a stable daily life while getting to know neighbours.",
+            f"Moved to Krabville in Season {season_id} with the {family} household.", created,
+        ),
+    ).fetchone()[0])
+    connection.execute(
+        """
+        UPDATE resident_identities SET generation_seed=?,given_name=?,family_name=?,display_name=?,
+          pronouns='they/them',gender_identity=?,orientation=?,ancestry='newcomer',
+          appearance_key=?,biography=?,generated_at=? WHERE resident_id=?
+        """,
+        (
+            f"v21-arrival:{season_id}:{slug}", given, family, name,
+            "developing" if stage in MINOR_STAGES else rng.choice(("woman", "man", "nonbinary")),
+            "not specified" if stage in MINOR_STAGES else rng.choice(("heterosexual", "bisexual", "pansexual", "gay", "lesbian", "asexual")),
+            dumps(appearance), f"Arrived in Season {season_id} and is making a life in Krabville.",
+            created, resident_id,
+        ),
+    )
+    stage_index = rng.randint(0, 2) if stage == "adult" else 0
+    connection.execute(
+        """
+        UPDATE resident_lifecycle SET current_stage=?,seasons_in_stage=?,alive=1,
+          stage_started_season_id=?,genetic_seed=? WHERE resident_id=?
+        """,
+        (stage, stage_index, season_id, f"genes:v21:{slug}", resident_id),
+    )
+    connection.execute(
+        """
+        INSERT INTO household_members(
+          household_id,resident_id,role,legal_guardian,financially_responsible,
+          joined_season_id,joined_tick
+        ) VALUES(?,?,?,?,?,?,?)
+        """,
+        (
+            household_id, resident_id, role, int(stage in ADULT_STAGES),
+            int(stage in ADULT_STAGES), season_id, tick,
+        ),
+    )
+    opening = 0 if stage in MINOR_STAGES else rng.randint(90_000, 950_000)
+    connection.execute(
+        """
+        INSERT INTO financial_accounts(
+          resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
+        ) VALUES(?,'Personal chequing','chequing',?,?,?)
+        """,
+        (resident_id, opening, season_id, tick),
+    )
+    if stage in ADULT_STAGES:
+        connection.execute(
+            """
+            INSERT INTO financial_accounts(
+              resident_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
+            ) VALUES(?,'Savings','savings',?,?,?)
+            """,
+            (resident_id, rng.randint(50_000, 1_250_000), season_id, tick),
+        )
+    if stage in {"teen", "adult", "senior"}:
+        connection.execute(
+            "INSERT OR IGNORE INTO resident_phones(resident_id,phone_number,issued_season_id,issued_tick) VALUES(?,?,?,?)",
+            (resident_id, f"+1 226-555-{100 + resident_id:04d}", season_id, tick),
+        )
+    if stage == "adult":
+        _hire_resident(connection, resident_id, season_id, tick)
+    return {"id": resident_id, "slug": slug, "name": name, "stage": stage}
+
+
+def _add_newcomer_households(
+    connection: sqlite3.Connection,
+    season_id: int,
+    tick: int,
+    seed_hex: str,
+    target_population: int,
+    max_adults: int,
+) -> list[dict[str, Any]]:
+    arrivals: list[dict[str, Any]] = []
+    season_number = int(connection.execute("SELECT number FROM seasons WHERE id=?", (season_id,)).fetchone()[0])
+    while True:
+        living, adult_count = connection.execute(
+            """
+            SELECT COUNT(*),COALESCE(SUM(current_stage IN ('adult','senior')),0)
+            FROM resident_lifecycle WHERE alive=1
+            """
+        ).fetchone()
+        remaining = target_population - int(living)
+        if remaining <= 0:
+            break
+        group_size = min(3, remaining)
+        if group_size == 1:
+            stages = ["adult"]
+        elif group_size == 2:
+            stages = ["adult", "child"] if season_number % 2 else ["adult", "adult"]
+        else:
+            stages = ["adult", "adult", "child"]
+        while int(adult_count) + sum(stage == "adult" for stage in stages) > max_adults:
+            stages[stages.index("adult")] = "teen"
+        home = _available_home(connection, len(stages))
+        if not home:
+            break
+        rng = _rng(seed_hex, "arrival-household", season_id, len(arrivals))
+        family_index = (season_number * 5 + len(arrivals) * 7 + rng.randrange(len(_NEWCOMER_FAMILY_NAMES))) % len(_NEWCOMER_FAMILY_NAMES)
+        family = _NEWCOMER_FAMILY_NAMES[family_index]
+        for _ in _NEWCOMER_FAMILY_NAMES:
+            if not connection.execute(
+                "SELECT 1 FROM households WHERE name=? AND status='active'",
+                (f"{family} household",),
+            ).fetchone():
+                break
+            family_index = (family_index + 1) % len(_NEWCOMER_FAMILY_NAMES)
+            family = _NEWCOMER_FAMILY_NAMES[family_index]
+        base_slug = "-".join(f"{family}-household-s{season_number}".casefold().replace("'", "").split())
+        household_slug = base_slug
+        suffix = 2
+        while connection.execute("SELECT 1 FROM households WHERE slug=?", (household_slug,)).fetchone():
+            household_slug, suffix = f"{base_slug}-{suffix}", suffix + 1
+        household_type = "single" if len(stages) == 1 else "family" if any(stage in MINOR_STAGES for stage in stages) else "couple"
+        household_id = int(connection.execute(
+            """
+            INSERT INTO households(
+              slug,name,household_type,status,founded_season_id,founded_tick,financial_policy,created_at
+            ) VALUES(?,?,?,'active',?,?,'mixed',?) RETURNING id
+            """,
+            (household_slug, f"{family} household", household_type, season_id, tick, now_iso()),
+        ).fetchone()[0])
+        home_name = str(home["map_location"] or home["name"])
+        connection.execute(
+            """
+            INSERT INTO property_occupancy(
+              property_id,household_id,occupancy_type,monthly_cost_cents,
+              started_season_id,started_tick
+            ) VALUES(?,?,'renter',?,?,?)
+            """,
+            (
+                home["id"], household_id,
+                118_000 + len(stages) * 18_000 if home["property_type"] == "apartment" else 176_000,
+                season_id, tick,
+            ),
+        )
+        connection.execute("UPDATE properties SET status='occupied' WHERE id=?", (home["id"],))
+        connection.execute(
+            """
+            INSERT INTO financial_accounts(
+              household_id,name,account_type,opening_balance_cents,opened_season_id,opened_tick
+            ) VALUES(?,'Household chequing','chequing',?,?,?)
+            """,
+            (household_id, rng.randint(350_000, 1_800_000), season_id, tick),
+        )
+        people: list[dict[str, Any]] = []
+        used_given: set[str] = set()
+        for ordinal, stage in enumerate(stages):
+            given_index = (season_number * 3 + household_id * 5 + ordinal * 11) % len(_NEWCOMER_GIVEN_NAMES)
+            given = _NEWCOMER_GIVEN_NAMES[given_index]
+            while given in used_given:
+                given_index = (given_index + 1) % len(_NEWCOMER_GIVEN_NAMES)
+                given = _NEWCOMER_GIVEN_NAMES[given_index]
+            used_given.add(given)
+            people.append(_create_newcomer_resident(
+                connection, season_id=season_id, tick=tick, seed_hex=seed_hex,
+                household_id=household_id, home=home_name, given=given, family=family,
+                stage=stage, role="head" if ordinal == 0 else "partner" if stage == "adult" else "child",
+                ordinal=ordinal,
+            ))
+        adults = [person for person in people if person["stage"] == "adult"]
+        minors = [person for person in people if person["stage"] in MINOR_STAGES]
+        if len(adults) >= 2:
+            connection.execute(
+                """
+                INSERT INTO family_links(
+                  resident_id,relative_resident_id,relation_type,legal,started_season_id,started_tick
+                ) VALUES(?,?,'partner',1,?,?),(?,?,'partner',1,?,?)
+                """,
+                (adults[0]["id"], adults[1]["id"], season_id, tick, adults[1]["id"], adults[0]["id"], season_id, tick),
+            )
+        for minor in minors:
+            parent = adults[0]
+            connection.execute(
+                """
+                INSERT INTO family_links(
+                  resident_id,relative_resident_id,relation_type,biological,legal,started_season_id,started_tick
+                ) VALUES(?,?,'parent',1,1,?,?),(?,?,'child',1,1,?,?)
+                """,
+                (minor["id"], parent["id"], season_id, tick, parent["id"], minor["id"], season_id, tick),
+            )
+            provider = connection.execute(
+                "SELECT id FROM businesses WHERE name IN ('Canal Childcare','Krabville School') ORDER BY name='Canal Childcare' DESC LIMIT 1"
+            ).fetchone()
+            if provider:
+                connection.execute(
+                    """
+                    INSERT INTO childcare_arrangements(
+                      child_resident_id,arrangement_type,provider_business_id,cost_per_day_cents,
+                      status,started_season_id,started_tick
+                    ) VALUES(?,'school',?,4500,'active',?,?)
+                    """,
+                    (minor["id"], provider[0], season_id, tick),
+                )
+        event_id = int(connection.execute(
+            """
+            INSERT INTO life_events(
+              season_id,tick,event_type,subject_resident_id,household_id,property_id,
+              title,summary,outcome,severity,permanent,created_at
+            ) VALUES(?,?,'arrival',?,?,?,?,?,'settled',68,1,?) RETURNING id
+            """,
+            (
+                season_id, tick, people[0]["id"], household_id, home["id"],
+                f"The {family} household arrived",
+                f"{', '.join(person['name'] for person in people)} moved into {home_name}.", now_iso(),
+            ),
+        ).fetchone()[0])
+        connection.executemany(
+            "INSERT INTO life_event_participants(life_event_id,resident_id,role) VALUES(?,?,'newcomer')",
+            ((event_id, person["id"]) for person in people),
+        )
+        connection.execute(
+            """
+            INSERT INTO story_ledger(
+              season_id,tick,day,entry_type,headline,summary,significance,visibility,life_event_id,created_at
+            ) VALUES(?,?,7,'arrival',?,?,72,'public',?,?)
+            """,
+            (
+                season_id, tick, f"The {family} household joined Krabville",
+                f"A new household settled at {home_name}, bringing {len(people)} residents.",
+                event_id, now_iso(),
+            ),
+        )
+        arrivals.append({
+            "household": household_slug, "home": home_name,
+            "residents": [person["slug"] for person in people],
+        })
+    return arrivals
+
+
+def _repair_guardians(connection: sqlite3.Connection, season_id: int, tick: int) -> list[dict[str, Any]]:
+    repaired: list[dict[str, Any]] = []
+    minors = list(connection.execute(
+        """
+        SELECT r.id,r.slug,r.name,r.home,l.current_stage,hm.household_id
+        FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id AND l.alive=1
+          AND l.current_stage IN ('baby','child','teen')
+        JOIN household_members hm ON hm.resident_id=r.id AND hm.ended_season_id IS NULL
+        ORDER BY r.id
+        """
+    ))
+    for minor in minors:
+        guardian = connection.execute(
+            """
+            SELECT adult.id,adult.name,home.household_id,adult.home
+            FROM household_members home
+            JOIN residents adult ON adult.id=home.resident_id
+            JOIN resident_lifecycle life ON life.resident_id=adult.id AND life.alive=1
+              AND life.current_stage IN ('adult','senior')
+            WHERE home.household_id=? AND home.ended_season_id IS NULL
+            ORDER BY home.legal_guardian DESC,home.financially_responsible DESC,adult.id LIMIT 1
+            """,
+            (minor["household_id"],),
+        ).fetchone()
+        if not guardian:
+            guardian = connection.execute(
+                """
+                SELECT adult.id,adult.name,home.household_id,adult.home
+                FROM family_links family
+                JOIN residents adult ON adult.id=family.relative_resident_id
+                JOIN resident_lifecycle life ON life.resident_id=adult.id AND life.alive=1
+                  AND life.current_stage IN ('adult','senior')
+                JOIN household_members home ON home.resident_id=adult.id AND home.ended_season_id IS NULL
+                WHERE family.resident_id=? AND family.ended_season_id IS NULL
+                ORDER BY CASE family.relation_type WHEN 'parent' THEN 0 WHEN 'guardian' THEN 1 ELSE 2 END,adult.id LIMIT 1
+                """,
+                (minor["id"],),
+            ).fetchone()
+        if not guardian:
+            guardian = connection.execute(
+                """
+                SELECT adult.id,adult.name,home.household_id,adult.home
+                FROM residents adult JOIN resident_lifecycle life ON life.resident_id=adult.id
+                  AND life.alive=1 AND life.current_stage='adult'
+                JOIN household_members home ON home.resident_id=adult.id AND home.ended_season_id IS NULL
+                ORDER BY (
+                  SELECT COUNT(*) FROM household_members dependents
+                  JOIN resident_lifecycle dependent_life ON dependent_life.resident_id=dependents.resident_id
+                    AND dependent_life.alive=1 AND dependent_life.current_stage IN ('baby','child','teen')
+                  WHERE dependents.household_id=home.household_id AND dependents.ended_season_id IS NULL
+                ),adult.id LIMIT 1
+                """
+            ).fetchone()
+        if not guardian:
+            continue
+        old_household = int(minor["household_id"])
+        new_household = int(guardian["household_id"])
+        if old_household != new_household:
+            connection.execute(
+                """
+                UPDATE household_members SET ended_season_id=?,ended_tick=?,end_reason='guardian reassignment'
+                WHERE resident_id=? AND ended_season_id IS NULL
+                """,
+                (season_id, tick, minor["id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO household_members(
+                  household_id,resident_id,role,legal_guardian,financially_responsible,
+                  joined_season_id,joined_tick
+                ) VALUES(?,?,'child',0,0,?,?)
+                """,
+                (new_household, minor["id"], season_id, tick),
+            )
+            connection.execute(
+                "UPDATE residents SET home=? WHERE id=?",
+                (guardian["home"], minor["id"]),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO family_links(
+                  resident_id,relative_resident_id,relation_type,legal,started_season_id,started_tick
+                ) VALUES(?,?,'guardian',1,?,?),(?,?,'dependent',1,?,?)
+                """,
+                (minor["id"], guardian["id"], season_id, tick, guardian["id"], minor["id"], season_id, tick),
+            )
+            _release_empty_household(connection, season_id, tick, old_household)
+        active_care = connection.execute(
+            "SELECT 1 FROM childcare_arrangements WHERE child_resident_id=? AND status='active' LIMIT 1",
+            (minor["id"],),
+        ).fetchone()
+        if not active_care:
+            if minor["current_stage"] == "baby":
+                connection.execute(
+                    """
+                    INSERT INTO childcare_arrangements(
+                      child_resident_id,arrangement_type,caregiver_resident_id,cost_per_day_cents,
+                      status,started_season_id,started_tick
+                    ) VALUES(?,'family',?,0,'active',?,?)
+                    """,
+                    (minor["id"], guardian["id"], season_id, tick),
+                )
+                connection.execute(
+                    "UPDATE employment SET status='leave' WHERE resident_id=? AND status='active'",
+                    (guardian["id"],),
+                )
+            else:
+                provider = connection.execute(
+                    "SELECT id FROM businesses WHERE name IN ('Canal Childcare','Krabville School') ORDER BY name='Canal Childcare' DESC LIMIT 1"
+                ).fetchone()
+                if provider:
+                    connection.execute(
+                        """
+                        INSERT INTO childcare_arrangements(
+                          child_resident_id,arrangement_type,provider_business_id,cost_per_day_cents,
+                          status,started_season_id,started_tick
+                        ) VALUES(?,'school',?,4500,'active',?,?)
+                        """,
+                        (minor["id"], provider[0], season_id, tick),
+                    )
+        repaired.append({"resident": minor["slug"], "guardian": int(guardian["id"])})
+    return repaired
+
+
+def grow_population(
+    connection: sqlite3.Connection,
+    season_id: int,
+    tick: int,
+    seed_hex: str,
+    *,
+    max_population: int = 32,
+    max_adults: int = 24,
+) -> dict[str, Any]:
+    season_number = int(connection.execute(
+        "SELECT number FROM seasons WHERE id=?", (season_id,)
+    ).fetchone()[0])
+    target = min(max_population, population_target_for_season(season_number))
+    birth_seasons = {1, 4, 7, 10, 13, 16, 19}
+    births = add_next_generation(
+        connection, season_id, tick, seed_hex, max_population=max_population,
+        max_adults=max_adults, target_population=target,
+        max_births=int(season_number in birth_seasons),
+    )
+    arrivals = _add_newcomer_households(
+        connection, season_id, tick, seed_hex, target, max_adults
+    )
+    guardians = _repair_guardians(connection, season_id, tick)
+    for resident in connection.execute(
+        """
+        SELECT r.id FROM residents r JOIN resident_lifecycle l ON l.resident_id=r.id
+        WHERE l.alive=1 AND l.current_stage='adult' AND NOT EXISTS (
+          SELECT 1 FROM employment e WHERE e.resident_id=r.id
+            AND e.status IN ('active','leave','suspended')
+        ) ORDER BY r.id
+        """
+    ):
+        _hire_resident(connection, int(resident["id"]), season_id, tick)
+    living = int(connection.execute(
+        "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1"
+    ).fetchone()[0])
+    return {
+        "target": target, "living": living, "births": births,
+        "arrivals": arrivals, "guardianRepairs": guardians,
+    }
 
 
 def account_balance(connection: sqlite3.Connection, account_id: int) -> int:

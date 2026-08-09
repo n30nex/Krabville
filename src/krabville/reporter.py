@@ -586,9 +586,12 @@ def generate_report(
     if not narrative:
         narrative = " ".join(item["summary"] for item in statistics["ledger"]["highlights"])[:5000]
 
-    map_path = settings.asset_dir / "kvsim-town-v2.webp"
+    exterior_season = ("spring", "summer", "fall", "winter")[
+        min(3, max(0, (int(season["number"]) - 1) // 5))
+    ]
+    map_path = settings.asset_dir / f"kvsim-town-v21-{exterior_season}.webp"
     if not map_path.exists():
-        map_path = settings.asset_dir / "krabville-map.webp"
+        map_path = settings.asset_dir / "kvsim-town-v21-spring.webp"
     if map_path.exists():
         with Image.open(map_path) as source:
             background = source.convert("RGB").resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
