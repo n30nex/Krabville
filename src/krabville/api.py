@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
+from .backup import last_verified_backup
 from .commerce_v2 import item_asset_index
 from .config import Settings
 from .content import LOCATION_POINTS
@@ -2091,6 +2092,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "fallbackReasoning": settings.fallback_reasoning,
                 },
                 "usage": _usage(connection, int(season["id"]), settings) if season else None,
+                "backup": last_verified_backup(settings),
                 "residentCount": result["residents"],
                 "updatedAt": now_iso(),
             }
@@ -2152,6 +2154,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "# HELP krabville_residents Living resident count.",
             "# TYPE krabville_residents gauge",
             f"krabville_residents {int(payload['residentCount'])}",
+            "# HELP krabville_backup_verified Whether a verified backup is recorded.",
+            "# TYPE krabville_backup_verified gauge",
+            f"krabville_backup_verified {1 if payload['backup']['available'] else 0}",
         ))
         return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 

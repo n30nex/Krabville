@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 
+from .backup import create_backup, restore_dry_run, verify_backup
 from .config import Settings
 from .db import assert_schema, initialize, open_database
 from .inference import FakeProvider, process_one
@@ -23,6 +24,13 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("bootstrap")
     sub.add_parser("init")
+    backup = sub.add_parser("backup")
+    backup.add_argument("--output", type=Path)
+    verify = sub.add_parser("verify-backup")
+    verify.add_argument("--backup", type=Path, required=True)
+    restore = sub.add_parser("restore")
+    restore.add_argument("--backup", type=Path, required=True)
+    restore.add_argument("--dry-run", action="store_true", required=True)
     start = sub.add_parser("start")
     start.add_argument("--opening-slug")
     tick = sub.add_parser("tick")
@@ -45,6 +53,15 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _parser().parse_args()
     settings = Settings.from_env()
+    if args.command == "backup":
+        print(json.dumps(create_backup(settings, args.output), indent=2, default=str))
+        return
+    if args.command == "verify-backup":
+        print(json.dumps(verify_backup(settings, args.backup), indent=2, default=str))
+        return
+    if args.command == "restore":
+        print(json.dumps(restore_dry_run(settings, args.backup), indent=2, default=str))
+        return
     connection = (
         initialize(settings)
         if args.command in {"bootstrap", "init"}
