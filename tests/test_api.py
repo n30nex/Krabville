@@ -127,6 +127,7 @@ def test_events_are_resumable_and_compatibility_route_survives(settings_factory)
 
 def test_untrusted_host_is_rejected(settings_factory) -> None:
     settings = settings_factory()
+    initialize(settings).close()
     with TestClient(create_app(settings), base_url="http://evil.invalid") as client:
         assert client.get("/healthz").status_code == 400
 
@@ -154,6 +155,7 @@ def test_health_and_metrics_expose_runtime_freshness(settings_factory) -> None:
 
 def test_html_prevents_edge_script_injection(settings_factory) -> None:
     settings = settings_factory()
+    initialize(settings).close()
     settings.frontend_dir.mkdir(parents=True)
     (settings.frontend_dir / "index.html").write_text("<!doctype html><title>Krabville</title>", encoding="utf-8")
     with TestClient(create_app(settings), base_url="http://testserver") as client:
@@ -164,6 +166,7 @@ def test_html_prevents_edge_script_injection(settings_factory) -> None:
 
 def test_empty_town_state_has_a_complete_public_schema(settings_factory) -> None:
     settings = settings_factory()
+    initialize(settings).close()
     with TestClient(create_app(settings), base_url="http://testserver") as client:
         payload = client.get("/api/v2/state").json()
         assert payload["season"] is None

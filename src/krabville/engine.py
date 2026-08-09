@@ -8,7 +8,7 @@ from typing import Any
 
 from .config import Settings
 from .control import ControlServer
-from .db import connect, emit, initialize, now_iso
+from .db import connect, emit, now_iso, open_database
 from .observability import configure_logging, log_event
 from .reporter import generate_report
 from .world import (
@@ -28,7 +28,7 @@ class Engine:
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
-        self.connection = initialize(self.settings)
+        self.connection = open_database(self.settings)
         self.stop_event = threading.Event()
         self.control = ControlServer(
             self.settings.control_socket,

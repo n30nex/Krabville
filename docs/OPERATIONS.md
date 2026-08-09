@@ -39,13 +39,18 @@ season data live under the configured data directory.
 git fetch --tags origin
 git pull --ff-only
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env build --pull
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env --profile inference stop inference engine web
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env --profile inference up -d
 curl -fsS http://127.0.0.1:18889/healthz
 ```
 
-Database migrations are additive and run on startup. Make an online backup
-before an upgrade. Do not delete the previous image until the health endpoint,
-public state, live tick advancement, and inference queue have all been checked.
+Database migrations are additive and owned by the one-shot `migrate` service.
+Stop the existing runtime containers before the migration-gated `up`; otherwise
+Compose can leave an old container serving while bootstrap runs. Web, engine,
+and inference then remain stopped if bootstrap or checksum validation fails.
+See [Migration bootstrap](MIGRATION_BOOTSTRAP.md). Make an online backup before
+an upgrade. Do not delete the previous image until the health endpoint, public
+state, live tick advancement, and inference queue have all been checked.
 
 ## Rollback
 

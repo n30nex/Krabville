@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .config import Settings
-from .db import connect, dumps, initialize, loads, now_iso, transaction
+from .db import connect, dumps, loads, now_iso, open_database, transaction
 from .observability import configure_logging, log_event
 from .security import validate_public_text
 
@@ -629,7 +629,7 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
 def run_worker(settings: Settings | None = None, *, once: bool = False) -> int:
     configure_logging()
     settings = settings or Settings.from_env()
-    connection = initialize(settings)
+    connection = open_database(settings)
     provider: Provider = FakeProvider() if settings.fake_provider else CodexProvider(settings, settings.database_path)
     try:
         while True:

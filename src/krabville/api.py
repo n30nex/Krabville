@@ -22,9 +22,9 @@ from .db import (
     applied_schema_version,
     connect,
     dumps,
-    initialize,
     loads,
     now_iso,
+    open_database,
     required_schema_version,
     transaction,
 )
@@ -2006,8 +2006,8 @@ def _state(connection: sqlite3.Connection, settings: Settings) -> dict[str, Any]
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_directories()
-    bootstrap = initialize(settings)
-    bootstrap.close()
+    schema = open_database(settings, readonly=True)
+    schema.close()
     security = VoteSecurity(settings.voter_secret)
 
     @asynccontextmanager
