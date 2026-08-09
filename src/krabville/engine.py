@@ -8,7 +8,7 @@ from typing import Any
 
 from .config import Settings
 from .control import ControlServer
-from .db import connect, initialize
+from .db import connect, emit, initialize, now_iso
 from .observability import configure_logging, log_event
 from .reporter import generate_report
 from .world import (
@@ -24,6 +24,8 @@ from .world import (
 
 
 class Engine:
+    max_tick_failures = 3
+
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
         self.connection = initialize(self.settings)
@@ -117,6 +119,107 @@ class Engine:
 
         return self._control(rebuild)
 
+    def _record_tick_failure(self, error: Exception, elapsed_ms: int) -> dict[str, Any]:
+        season = self.connection.execute(
+            "SELECT id,number,status,current_tick FROM seasons ORDER BY number DESC LIMIT 1"
+        ).fetchone()
+        if not season:
+            raise error
+        timestamp = now_iso()
+        self.connection.execute(
+            """
+            INSERT INTO runtime_incidents(
+              season_id,tick,component,incident_key,error_class,status,
+              attempts,first_at,last_at
+            ) VALUES(?,?, 'engine','advance_tick',?,'open',1,?,?)
+            ON CONFLICT(season_id,tick,component,incident_key) DO UPDATE SET
+              error_class=excluded.error_class,status='open',
+              attempts=runtime_incidents.attempts+1,last_at=excluded.last_at,resolved_at=NULL
+            """,
+            (
+                int(season["id"]),
+                int(season["current_tick"]),
+                type(error).__name__[:80],
+                timestamp,
+                timestamp,
+            ),
+        )
+        incident = self.connection.execute(
+            """
+            SELECT id,attempts,error_class FROM runtime_incidents
+            WHERE season_id=? AND tick=? AND component='engine' AND incident_key='advance_tick'
+            """,
+            (season["id"], season["current_tick"]),
+        ).fetchone()
+        attempts = int(incident["attempts"])
+        if attempts >= self.max_tick_failures:
+            self.connection.execute(
+                "UPDATE seasons SET status='paused',model_degraded=1 WHERE id=?",
+                (season["id"],),
+            )
+        emit(
+            self.connection,
+            int(season["id"]),
+            int(season["current_tick"]),
+            "runtime_incident",
+            {
+                "component": "engine",
+                "status": "paused" if attempts >= self.max_tick_failures else "retrying",
+                "attempts": attempts,
+            },
+        )
+        self.connection.commit()
+        log_event(
+            "engine",
+            "tick_failed",
+            season=int(season["number"]),
+            tick=int(season["current_tick"]),
+            status="paused" if attempts >= self.max_tick_failures else "retrying",
+            errorClass=incident["error_class"],
+            attempt=attempts,
+            elapsedMs=elapsed_ms,
+        )
+        return {
+            "advanced": False,
+            "status": "paused" if attempts >= self.max_tick_failures else "retrying",
+            "tick": int(season["current_tick"]),
+            "incidentId": int(incident["id"]),
+            "attempts": attempts,
+        }
+
+    def _resolve_tick_incident(self, attempted_tick: int) -> None:
+        timestamp = now_iso()
+        changed = self.connection.execute(
+            """
+            UPDATE runtime_incidents SET status='resolved',resolved_at=?,last_at=?
+            WHERE status='open' AND component='engine' AND incident_key='advance_tick'
+              AND season_id=(SELECT id FROM seasons ORDER BY number DESC LIMIT 1)
+              AND tick=?
+            """,
+            (timestamp, timestamp, attempted_tick),
+        ).rowcount
+        if changed:
+            self.connection.commit()
+            log_event("engine", "tick_recovered", tick=attempted_tick, status="resolved")
+
+    def _advance_once(self) -> dict[str, Any]:
+        row = self.connection.execute(
+            "SELECT current_tick FROM seasons ORDER BY number DESC LIMIT 1"
+        ).fetchone()
+        attempted_tick = int(row["current_tick"]) if row else 0
+        started = time.monotonic()
+        try:
+            result = advance_tick(self.connection)
+        except Exception as error:
+            return self._record_tick_failure(
+                error,
+                max(0, round((time.monotonic() - started) * 1000)),
+            )
+        if result.get("advanced"):
+            self._resolve_tick_incident(attempted_tick)
+        result["elapsedMs"] = max(0, round((time.monotonic() - started) * 1000))
+        return result
+
     def run(self) -> None:
         self.control.start()
         deadline = time.monotonic()
@@ -130,8 +233,7 @@ class Engine:
             sequence=snapshot["runtime"]["eventSequence"],
         )
         while not self.stop_event.is_set():
-            started = time.monotonic()
-            result = advance_tick(self.connection)
+            result = self._advance_once()
             if result.get("advanced") and int(result.get("tick", 0)) % 36 == 0:
                 queue_conversation_if_needed(self.connection)
             if result.get("status") == "complete":
@@ -153,7 +255,7 @@ class Engine:
                     season=int(row["number"]) if row else None,
                     tick=tick,
                     sequence=sequence,
-                    elapsedMs=max(0, round((time.monotonic() - started) * 1000)),
+                    elapsedMs=result.get("elapsedMs"),
                 )
             deadline += self.settings.tick_seconds
             wait = deadline - time.monotonic()

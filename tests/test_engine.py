@@ -5,6 +5,7 @@ from PIL import Image
 import json
 from pathlib import Path
 import pytest
+import krabville.engine as engine_module
 
 from krabville.content import MAJOR_EVENTS, MICRO_EVENTS, PATH_EDGES, PATH_NODES
 from krabville.db import initialize, loads, now_iso, retrieve_memories
@@ -54,6 +55,69 @@ def test_campaign_continues_only_natural_seasons_and_stops_at_limit(settings_fac
             (now_iso(), second["seasonId"]),
         )
         assert engine._continue_if_due(engine.connection) is None
+    finally:
+        engine.close()
+
+
+def test_tick_failure_retries_same_tick_and_resolves(monkeypatch, settings_factory) -> None:
+    engine = Engine(settings_factory())
+    try:
+        season_id = start_season(engine.connection, seed_hex="11" * 32)["seasonId"]
+        real_advance = engine_module.advance_tick
+        failures = 0
+
+        def flaky(connection):
+            nonlocal failures
+            if failures < 2:
+                failures += 1
+                raise RuntimeError("injected tick failure")
+            return real_advance(connection)
+
+        monkeypatch.setattr(engine_module, "advance_tick", flaky)
+        assert engine._advance_once()["status"] == "retrying"
+        assert engine._advance_once()["status"] == "retrying"
+        assert engine.connection.execute(
+            "SELECT current_tick FROM seasons WHERE id=?", (season_id,)
+        ).fetchone()[0] == 0
+        assert engine._advance_once()["advanced"] is True
+        assert engine.connection.execute(
+            "SELECT current_tick FROM seasons WHERE id=?", (season_id,)
+        ).fetchone()[0] == 1
+        incident = engine.connection.execute(
+            "SELECT status,attempts,error_class FROM runtime_incidents"
+        ).fetchone()
+        assert dict(incident) == {
+            "status": "resolved",
+            "attempts": 2,
+            "error_class": "RuntimeError",
+        }
+    finally:
+        engine.close()
+
+
+def test_three_tick_failures_pause_without_skipping(monkeypatch, settings_factory) -> None:
+    engine = Engine(settings_factory())
+    try:
+        season_id = start_season(engine.connection, seed_hex="12" * 32)["seasonId"]
+
+        def always_fail(connection):
+            raise ValueError("injected persistent failure")
+
+        monkeypatch.setattr(engine_module, "advance_tick", always_fail)
+        results = [engine._advance_once() for _ in range(3)]
+        assert [result["status"] for result in results] == [
+            "retrying",
+            "retrying",
+            "paused",
+        ]
+        season = engine.connection.execute(
+            "SELECT status,current_tick FROM seasons WHERE id=?", (season_id,)
+        ).fetchone()
+        assert dict(season) == {"status": "paused", "current_tick": 0}
+        snapshot = engine._diagnose(engine.connection)
+        assert snapshot["ok"] is False
+        assert snapshot["runtime"]["incidents"]["open"] == 1
+        assert snapshot["runtime"]["incidents"]["recent"][0]["attempts"] == 3
     finally:
         engine.close()
 
