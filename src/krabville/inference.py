@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from .config import Settings
 from .db import connect, dumps, initialize, loads, now_iso, transaction
+from .observability import configure_logging, log_event
 from .security import validate_public_text
 
 
@@ -530,6 +531,20 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
     else:
         attempts = all_attempts[min(used_attempts, len(all_attempts)):]
     last_error = "provider_failed"
+    context = loads(job["context_json"], {})
+    residents = context.get("residents") if isinstance(context, dict) else None
+    resident = (
+        residents[0].get("slug")
+        if isinstance(residents, list) and residents and isinstance(residents[0], dict)
+        else context.get("residentSlug") if isinstance(context, dict) else None
+    )
+    correlation = {
+        "season": int(job["season_id"]),
+        "tick": int(job["tick"]),
+        "job": int(job["id"]),
+        "resident": resident,
+        "kind": str(job["kind"]),
+    }
     for model, reasoning in attempts:
         try:
             usage_id = _reserve_attempt(connection, settings, job, model)
@@ -561,6 +576,15 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
             )
             if model == settings.primary_model:
                 _record_circuit_result(connection, job, model, failed=True)
+            log_event(
+                "inference",
+                "model_attempt",
+                **correlation,
+                model=model,
+                status="failed",
+                errorClass=error_class,
+                elapsedMs=duration_ms,
+            )
             last_error = error_class
             continue
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
@@ -575,6 +599,14 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
             (dumps(result), now_iso(), job["id"]),
         )
         connection.commit()
+        log_event(
+            "inference",
+            "model_attempt",
+            **correlation,
+            model=model,
+            status="complete",
+            elapsedMs=duration_ms,
+        )
         return True
     connection.execute(
         "UPDATE model_jobs SET status='failed',lease_until=NULL,error_code=?,updated_at=? WHERE id=?",
@@ -584,10 +616,18 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
         "UPDATE seasons SET model_degraded=1 WHERE id=?", (job["season_id"],)
     )
     connection.commit()
+    log_event(
+        "inference",
+        "model_job_failed",
+        **correlation,
+        status="failed",
+        errorClass=last_error,
+    )
     return True
 
 
 def run_worker(settings: Settings | None = None, *, once: bool = False) -> int:
+    configure_logging()
     settings = settings or Settings.from_env()
     connection = initialize(settings)
     provider: Provider = FakeProvider() if settings.fake_provider else CodexProvider(settings, settings.database_path)

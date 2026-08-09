@@ -4,10 +4,13 @@ import json
 import os
 import socket
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
+
+from .observability import log_event
 
 
 MAX_BYTES = 16 * 1024
@@ -67,6 +70,8 @@ class ControlServer:
                 response: dict[str, Any]
                 request_id = None
                 cacheable = False
+                started = time.monotonic()
+                operation = "unknown"
                 try:
                     request = json.loads(raw.split(b"\n", 1)[0].decode("utf-8"))
                     request_id = str(request.get("id") or uuid.uuid4())
@@ -107,4 +112,12 @@ class ControlServer:
                     self._responses.move_to_end(request_id)
                     while len(self._responses) > 128:
                         self._responses.popitem(last=False)
+                log_event(
+                    "engine",
+                    "control_request",
+                    request=request_id,
+                    operation=operation,
+                    status="complete" if response["ok"] else "failed",
+                    elapsedMs=max(0, round((time.monotonic() - started) * 1000)),
+                )
                 client.sendall(json.dumps(response, ensure_ascii=True, separators=(",", ":")).encode("utf-8") + b"\n")
