@@ -200,6 +200,39 @@ def test_dependent_care_keeps_a_caregiver_present_and_restores_needs_overnight(s
     ).fetchone()
     assert care_state["care_state"] == "covered"
     assert care_state["current_caregiver_id"] == caregiver
+
+    child_needs = loads(child_state["needs_json"], {})
+    child_needs.update({"hunger": 90, "hygiene": 90})
+    caregiver_needs = loads(connection.execute(
+        "SELECT needs_json FROM resident_state WHERE season_id=? AND resident_id=?",
+        (season["id"], caregiver),
+    ).fetchone()[0], {})
+    caregiver_needs["hunger"] = 0
+    connection.execute(
+        "UPDATE resident_state SET needs_json=? WHERE season_id=? AND resident_id=?",
+        (dumps(child_needs), season["id"], child["id"]),
+    )
+    connection.execute(
+        "UPDATE resident_state SET needs_json=?,activity='caring for a child at home' WHERE season_id=? AND resident_id=?",
+        (dumps(caregiver_needs), season["id"], caregiver),
+    )
+    connection.execute(
+        "UPDATE seasons SET current_tick=78,current_day=0,world_minutes=390 WHERE id=?",
+        (season["id"],),
+    )
+    advance_tick(connection)
+    self_care = connection.execute(
+        "SELECT activity FROM resident_state WHERE season_id=? AND resident_id=?",
+        (season["id"], caregiver),
+    ).fetchone()[0]
+    assert "meal" in self_care
+    advance_tick(connection)
+    recovered = connection.execute(
+        "SELECT location,needs_json FROM resident_state WHERE season_id=? AND resident_id=?",
+        (season["id"], caregiver),
+    ).fetchone()
+    assert recovered["location"] == child["home"]
+    assert loads(recovered["needs_json"], {})["hunger"] > 0
     connection.close()
 
 
@@ -219,6 +252,15 @@ def test_school_care_places_children_inside_the_provider(settings_factory) -> No
         """
     ).fetchone()
     assert child
+    child_needs = loads(connection.execute(
+        "SELECT needs_json FROM resident_state WHERE season_id=? AND resident_id=?",
+        (season["id"], child["id"]),
+    ).fetchone()[0], {})
+    child_needs["social"] = 0
+    connection.execute(
+        "UPDATE resident_state SET needs_json=? WHERE season_id=? AND resident_id=?",
+        (dumps(child_needs), season["id"], child["id"]),
+    )
     connection.execute(
         "UPDATE seasons SET current_tick=108,current_day=0,world_minutes=540 WHERE id=?",
         (season["id"],),
@@ -234,9 +276,16 @@ def test_school_care_places_children_inside_the_provider(settings_factory) -> No
     ).fetchone()
     assert child_state["location"] == child["provider_location"]
     assert child["provider_name"] in child_state["activity"]
+    assert "socializing" in child_state["activity"]
     assert care_state["care_state"] == "institutional"
     assert care_state["current_caregiver_id"] is None
     assert care_state["current_care_provider_id"] == child["provider_business_id"]
+    advance_tick(connection)
+    recovered = loads(connection.execute(
+        "SELECT needs_json FROM resident_state WHERE season_id=? AND resident_id=?",
+        (season["id"], child["id"]),
+    ).fetchone()[0], {})
+    assert recovered["social"] > 0
     connection.close()
 
 
