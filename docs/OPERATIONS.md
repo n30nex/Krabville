@@ -6,9 +6,18 @@ self-host Compose files:
 ```bash
 docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env ps
 curl -fsS http://127.0.0.1:18889/healthz
+curl -fsS http://127.0.0.1:18889/metrics
 curl -fsS http://127.0.0.1:18889/api/v3/state
-docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm engine krabville-manage diagnose
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env run --rm engine krabville-manage diagnose --json
 ```
+
+`/livez` proves only that the API process can answer. `/readyz` requires a valid
+database and deliberately does not gate engine startup on tick freshness.
+`/healthz` additionally requires a fresh running-season tick heartbeat and no
+expired model leases. `/metrics` exposes the same bounded checks in Prometheus
+text format. `KRABVILLE_TICK_STALE_SECONDS=0` uses the safe automatic bound of
+20 configured tick intervals, never less than 60 seconds; set a positive value
+only when an intentionally slow deployment needs a wider bound.
 
 ## Online backup
 

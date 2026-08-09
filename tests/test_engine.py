@@ -117,6 +117,30 @@ def test_diagnostics_are_current_season_only_and_do_not_reveal_seed(settings_fac
     assert snapshot["season"]["seedCommitment"]
     assert "seed_hex" not in json.dumps(snapshot)
     assert snapshot["jobs"]
+    assert snapshot["runtime"]["eventSequence"] > 0
+    assert snapshot["runtime"]["queue"]["staleLeases"] == 0
+    assert snapshot["runtime"]["tickFreshness"]["stale"] is False
+    connection.close()
+
+
+def test_diagnostics_flag_stale_tick_and_expired_model_lease(settings_factory) -> None:
+    settings = settings_factory()
+    connection = initialize(settings)
+    season_id = start_season(connection, seed_hex="64" * 32)["seasonId"]
+    connection.execute(
+        "UPDATE seasons SET started_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+        (season_id,),
+    )
+    connection.execute(
+        "UPDATE model_jobs SET status='leased',lease_until='2000-01-01T00:00:00+00:00' "
+        "WHERE id=(SELECT MIN(id) FROM model_jobs WHERE season_id=?)",
+        (season_id,),
+    )
+    snapshot = diagnose(connection, tick_seconds=0.01, tick_stale_seconds=1)
+    assert snapshot["ok"] is False
+    assert snapshot["status"] == "degraded"
+    assert snapshot["runtime"]["tickFreshness"]["stale"] is True
+    assert snapshot["runtime"]["queue"]["staleLeases"] == 1
     connection.close()
 
 

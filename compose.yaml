@@ -33,6 +33,7 @@ x-runtime: &runtime
     KRABVILLE_SEASON_LIMIT: ${KRABVILLE_SEASON_LIMIT:-20}
     KRABVILLE_AUTO_CONTINUE: ${KRABVILLE_AUTO_CONTINUE:-true}
     KRABVILLE_INTERMISSION_SECONDS: ${KRABVILLE_INTERMISSION_SECONDS:-600}
+    KRABVILLE_TICK_STALE_SECONDS: ${KRABVILLE_TICK_STALE_SECONDS:-0}
     KRABVILLE_MAX_POPULATION: ${KRABVILLE_MAX_POPULATION:-32}
     KRABVILLE_MAX_ADULTS: ${KRABVILLE_MAX_ADULTS:-24}
     KRABVILLE_RELEASE_COMMIT: ${KRABVILLE_RELEASE_COMMIT:-unknown}
@@ -61,7 +62,7 @@ services:
       simulation:
         ipv4_address: 172.28.89.10
     healthcheck:
-      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18889/healthz', timeout=2).read()"]
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18889/readyz', timeout=2).read()"]
       interval: 15s
       timeout: 4s
       retries: 4

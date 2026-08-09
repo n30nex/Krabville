@@ -30,7 +30,7 @@ class Engine:
         self.control = ControlServer(
             self.settings.control_socket,
             {
-                "status": lambda params: self._control(lambda connection: diagnose(connection)),
+                "status": lambda params: self._control(self._diagnose),
                 "start_season": lambda params: self._control(
                     lambda connection: start_season(
                         connection, opening_slug=params.get("openingSlug")
@@ -40,7 +40,7 @@ class Engine:
                 "resume": lambda params: self._control_operation(resume),
                 "stop_after_day": lambda params: self._control_operation(stop_after_day),
                 "stop_now": lambda params: self._control_operation(stop_now),
-                "diagnose": lambda params: self._control(lambda connection: diagnose(connection)),
+                "diagnose": lambda params: self._control(self._diagnose),
                 "rebuild_report": self._rebuild_report,
             },
         )
@@ -90,9 +90,16 @@ class Engine:
     def _control_operation(self, operation):
         def invoke(connection):
             operation(connection)
-            return diagnose(connection)
+            return self._diagnose(connection)
 
         return self._control(invoke)
+
+    def _diagnose(self, connection):
+        return diagnose(
+            connection,
+            tick_seconds=self.settings.tick_seconds,
+            tick_stale_seconds=self.settings.tick_stale_seconds,
+        )
 
     def _rebuild_report(self, params: dict[str, Any]) -> dict[str, Any]:
         season_id = int(params.get("seasonId") or 0)

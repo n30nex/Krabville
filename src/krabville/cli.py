@@ -29,7 +29,8 @@ def _parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run-fake-season")
     run.add_argument("--days", type=int, default=7)
     run.add_argument("--seasons", type=int, default=1)
-    sub.add_parser("diagnose")
+    diagnose_parser = sub.add_parser("diagnose")
+    diagnose_parser.add_argument("--json", action="store_true")
     legacy = sub.add_parser("import-week-one")
     legacy.add_argument("--payload", type=Path, required=True)
     legacy.add_argument("--poster", type=Path, required=True)
@@ -44,9 +45,15 @@ def main() -> None:
     args = _parser().parse_args()
     settings = Settings.from_env()
     connection = initialize(settings)
+    def runtime_diagnose():
+        return diagnose(
+            connection,
+            tick_seconds=settings.tick_seconds,
+            tick_stale_seconds=settings.tick_stale_seconds,
+        )
     try:
         if args.command == "init":
-            result = diagnose(connection)
+            result = runtime_diagnose()
         elif args.command == "start":
             result = start_season(connection, opening_slug=args.opening_slug)
         elif args.command == "tick":
@@ -79,9 +86,9 @@ def main() -> None:
                     connection.commit()
                 if not season or season["status"] != "complete":
                     break
-            result = diagnose(connection)
+            result = runtime_diagnose()
         elif args.command == "diagnose":
-            result = diagnose(connection)
+            result = runtime_diagnose()
         elif args.command == "import-week-one":
             payload = json.loads(args.payload.read_text(encoding="utf-8"))
             result = {
@@ -118,7 +125,7 @@ def main() -> None:
             connection.commit()
         else:
             raise SystemExit(2)
-        print(json.dumps(result, indent=2, default=str))
+        print(json.dumps(result, indent=None if getattr(args, "json", False) else 2, default=str))
     finally:
         connection.close()
 
