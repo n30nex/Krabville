@@ -154,7 +154,7 @@ class Engine:
         attempts = int(incident["attempts"])
         if attempts >= self.max_tick_failures:
             self.connection.execute(
-                "UPDATE seasons SET status='paused',model_degraded=1 WHERE id=?",
+                "UPDATE seasons SET status='paused' WHERE id=?",
                 (season["id"],),
             )
         emit(

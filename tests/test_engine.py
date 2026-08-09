@@ -111,13 +111,26 @@ def test_three_tick_failures_pause_without_skipping(monkeypatch, settings_factor
             "paused",
         ]
         season = engine.connection.execute(
-            "SELECT status,current_tick FROM seasons WHERE id=?", (season_id,)
+            "SELECT status,current_tick,model_degraded FROM seasons WHERE id=?",
+            (season_id,),
         ).fetchone()
-        assert dict(season) == {"status": "paused", "current_tick": 0}
+        assert dict(season) == {
+            "status": "paused",
+            "current_tick": 0,
+            "model_degraded": 0,
+        }
         snapshot = engine._diagnose(engine.connection)
         assert snapshot["ok"] is False
         assert snapshot["runtime"]["incidents"]["open"] == 1
         assert snapshot["runtime"]["incidents"]["recent"][0]["attempts"] == 3
+
+        stop_now(engine.connection)
+        completed = engine._diagnose(engine.connection)
+        assert completed["season"]["status"] == "complete"
+        assert completed["season"]["modelDegraded"] is False
+        assert completed["runtime"]["incidents"]["open"] == 0
+        assert completed["runtime"]["incidents"]["recent"][0]["status"] == "resolved"
+        assert completed["ok"] is True
     finally:
         engine.close()
 

@@ -2357,6 +2357,14 @@ def _complete_season(
         _local_chronicle(connection, season, day)
     finalize_season_goals(connection, int(season["id"]))
     completed = now_iso()
+    connection.execute(
+        """
+        UPDATE runtime_incidents
+        SET status='resolved',resolved_at=COALESCE(resolved_at,?),last_at=?
+        WHERE season_id=? AND status='open'
+        """,
+        (completed, completed, season["id"]),
+    )
     natural = final_tick >= TARGET_TICKS
     shown_tick = TARGET_TICKS if natural else max(0, final_tick)
     shown_day = DAYS_PER_SEASON - 1 if natural else min(DAYS_PER_SEASON - 1, shown_tick // TICKS_PER_DAY)
