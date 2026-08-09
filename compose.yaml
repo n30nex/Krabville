@@ -1,7 +1,7 @@
 name: krabville
 
 x-runtime: &runtime
-  image: krabville:2.1.2
+  image: krabville:2.1.3
   build:
     context: .
   user: "${KRABVILLE_UID:-1000}:${KRABVILLE_GID:-1000}"
@@ -83,6 +83,9 @@ services:
       - type: bind
         source: ${KRABVILLE_CONTROL_HOST:-./runtime/control}
         target: /control
+    depends_on:
+      web:
+        condition: service_healthy
     networks:
       simulation:
         ipv4_address: 172.28.89.11
