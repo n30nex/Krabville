@@ -137,3 +137,67 @@ test("directory deep links open after the first state load", async ({ page }) =>
   await expect(page.locator("#explore-title")).toHaveText("Bank & economy");
   await expect(page.locator('[data-explore="bank"]')).toHaveClass(/active/);
 });
+
+test("every directory route, home focus, clothing, and semantic inventory controls work", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "1366x768", "full route audit runs once at desktop size");
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && !message.location().url.endsWith("/favicon.ico")) consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+  const routes: Array<[string, string]> = [
+    ["residents", "Residents"], ["households", "Households"], ["family", "Families"],
+    ["calls", "Phone network"], ["places", "Places"], ["homes", "Homes"],
+    ["buildings", "Work & civic places"], ["shops", "Shops & businesses"],
+    ["bank", "Bank & economy"], ["analytics", "Krabville Analytics Lab"],
+    ["story", "Living story"], ["events", "Event ledger"], ["seasons", "Seasons"],
+  ];
+  for (const [route, title] of routes) {
+    await page.goto(`/#/explore/${route}`);
+    await expect(page.locator("#explore-view")).toBeVisible();
+    await expect(page.locator("#explore-title")).toHaveText(title);
+    await expect(page.locator("#explore-content")).not.toBeEmpty();
+  }
+
+  await page.goto("/#/explore/households");
+  const focusHome = page.getByRole("button", { name: "Focus home" }).first();
+  await expect(focusHome).toBeVisible();
+  await focusHome.click();
+  await expect(page).toHaveURL(/#\/property\//);
+  await expect(page.locator(".property-interior")).toBeVisible();
+
+  const publicState = await (await page.request.get("/api/v3/state")).json();
+  const generalStore = publicState.properties.find((property: { name: string; slug?: string }) => property.name === "Lagoon General Store");
+  expect(generalStore?.slug).toBeTruthy();
+  const resident = publicState.residents[0];
+  const detail = await (await page.request.get(`/api/v3/residents/${encodeURIComponent(resident.slug)}`)).json();
+  const storeDetail = await (await page.request.get(`/api/v3/properties/${encodeURIComponent(generalStore.slug)}`)).json();
+  expect(detail.clothing.length).toBeGreaterThan(0);
+  const expectedFrames: Record<string, number> = {
+    "baby-bottle": 22, "stuffed-toy": 125, "batteries": 110,
+    "toilet-paper": 76, "first-aid-kit": 87,
+  };
+  for (const [assetKey, frame] of Object.entries(expectedFrames)) {
+    const item = storeDetail.inventory.find((candidate: { assetKey: string }) => candidate.assetKey === assetKey);
+    expect(item, `${assetKey} should be stocked`).toBeTruthy();
+    expect(item.assetIndex).toBe(frame);
+  }
+
+  await page.goto(`/#/`);
+  await page.locator(`.resident-row[data-resident="${resident.slug}"]`).click();
+  await page.getByRole("button", { name: "Home & goods", exact: true }).click();
+  await expect(page.locator("#dossier-property")).toContainText("Clothing and outfit");
+  await expect(page.locator("#dossier-property .item-icon").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.goto(`/#/property/${encodeURIComponent(generalStore.slug)}`);
+  const search = page.locator("[data-inventory-search]");
+  await expect(search).toBeVisible();
+  await search.fill("baby bottle");
+  await expect(page.locator(".inventory-grid article:visible")).toHaveCount(1);
+  await expect(page.locator(".inventory-grid article:visible")).toContainText("Baby bottle");
+  await expect(page.locator("[data-inventory-visible]")).toHaveText("1 shown");
+
+  expect(consoleErrors).toEqual([]);
+});

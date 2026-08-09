@@ -173,6 +173,7 @@ export interface Resident {
   communications?: CommunicationSummary[];
   properties?: PropertySummary[];
   inventory?: string[];
+  clothing?: InventoryItem[];
   onPersonInventory?: InventoryItem[];
   homeInventory?: InventoryItem[];
   transactions?: Array<{ id: number; tick: number; category: string; description: string; amount: number }>;
@@ -301,6 +302,11 @@ export interface KrabvilleState {
     stockUnits?: number;
     barters?: number;
     phoneCalls?: number;
+    transactionCount?: number;
+    transactionVolume?: number;
+    businessRevenue?: number;
+    serviceRevenue?: number;
+    goodsSold?: number;
   };
   families?: Array<{ id?: string | number; name: string; members: FamilyLink[]; summary?: string }>;
   properties?: PropertySummary[];

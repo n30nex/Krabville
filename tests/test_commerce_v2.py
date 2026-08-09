@@ -15,7 +15,7 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
     start_season(connection, seed_hex="93" * 32)
     season = connection.execute("SELECT * FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
 
-    assert connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone()[0] >= 180
+    assert connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone()[0] >= 380
     assert connection.execute("SELECT COUNT(*) FROM resident_phones").fetchone()[0] == connection.execute(
         "SELECT COUNT(*) FROM resident_lifecycle WHERE alive=1 AND current_stage IN ('teen','adult','senior')"
     ).fetchone()[0]
@@ -37,6 +37,29 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
         (stock["business_id"], stock["item_id"]),
     )
     model_jobs = connection.execute("SELECT COUNT(*) FROM model_jobs").fetchone()[0]
+    business_before = {
+        row["name"]: account_balance(connection, int(row["account_id"]))
+        for row in connection.execute(
+            """
+            SELECT b.name,a.id account_id FROM businesses b JOIN financial_accounts a
+              ON a.business_id=b.id AND a.name='Operating' AND a.status='open'
+            """
+        )
+    }
+    settlement = settle_daily_economy(connection, int(season["id"]), 0, 48)
+    business_after = {
+        row["name"]: account_balance(connection, int(row["account_id"]))
+        for row in connection.execute(
+            """
+            SELECT b.name,a.id account_id FROM businesses b JOIN financial_accounts a
+              ON a.business_id=b.id AND a.name='Operating' AND a.status='open'
+            """
+        )
+    }
+    assert settlement["businessIncome"] > 0
+    assert settlement["businessPayroll"] > 0
+    assert settlement["servicePurchases"] > 0
+    assert any(business_after[name] != balance for name, balance in business_before.items())
     result = run_daily_commerce(connection, int(season["id"]), 0, 48)
     assert result["restocked"] >= 1
     assert connection.execute(
@@ -72,11 +95,15 @@ def test_everyday_economy_is_balanced_local_and_visible(settings_factory) -> Non
         assert all(resident["indoors"] for resident in payload["residents"])
         assert all(resident["building"] for resident in payload["residents"])
         assert payload["economy"]["stockUnits"] > 0
+        assert payload["economy"]["medianNetWorth"] > 0
         for resident in payload["residents"]:
             detail = client.get(f"/api/v3/residents/{resident['slug']}")
             assert detail.status_code == 200
             assert "phone" in detail.json()
+            assert "clothing" in detail.json()
+            assert detail.json()["clothing"]
             assert "homeInventory" in detail.json()
+            assert all(0 <= item["assetIndex"] < 196 for item in detail.json()["onPersonInventory"])
         dependent = next(resident for resident in payload["residents"] if resident["lifeStage"] in {"baby", "child"})
         assert dependent["care"]["state"] in {"covered", "institutional"}
         assert dependent["care"]["caregiver"]

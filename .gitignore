@@ -11,6 +11,7 @@ frontend/dist/
 frontend/test-results/
 art/kvsim/*-alpha-v2.png
 art/kvsim/*-alpha-v1.png
+!art/kvsim/inventory-alpha-v1.png
 runtime/
 deploy/.env
 deploy/secrets/

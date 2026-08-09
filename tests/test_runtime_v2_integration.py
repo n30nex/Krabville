@@ -228,6 +228,37 @@ def _run_scenario(settings) -> dict[str, str]:
     )
     assert all(row["balance"] == 0 for row in settlements)
     assert len({row["external_key"] for row in settlements}) == len(settlements)
+    business_balances = [
+        int(row[0])
+        for row in connection.execute(
+            """
+            SELECT a.opening_balance_cents+COALESCE(SUM(e.amount_cents),0)
+            FROM financial_accounts a LEFT JOIN transaction_entries e ON e.account_id=a.id
+            LEFT JOIN financial_transactions t ON t.id=e.transaction_id AND t.status='posted'
+            WHERE a.business_id IS NOT NULL AND a.name='Operating' GROUP BY a.id
+            """
+        )
+    ]
+    assert len(set(business_balances)) >= 5
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM transaction_entries e JOIN financial_transactions t ON t.id=e.transaction_id
+        WHERE t.season_id=? AND e.memo LIKE '%service:%' AND e.amount_cents>0
+        """,
+        (first_id,),
+    ).fetchone()[0] > 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM financial_transactions WHERE season_id=? AND category='retail_purchase'",
+        (first_id,),
+    ).fetchone()[0] > 0
+    assert connection.execute(
+        """
+        SELECT COUNT(*) FROM residents r WHERE NOT EXISTS (
+          SELECT 1 FROM resident_inventory ri JOIN item_catalog i ON i.id=ri.item_id
+          WHERE ri.resident_id=r.id AND i.category='clothing' AND ri.quantity>0
+        )
+        """
+    ).fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM model_usage").fetchone()[0] == 0
 
     event_types = [
