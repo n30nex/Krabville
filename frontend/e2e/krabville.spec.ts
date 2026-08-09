@@ -26,7 +26,8 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   const loadedAssets = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
   expect(loadedAssets.some((name) => name.endsWith("/assets/kvsim-town-v2.webp"))).toBe(true);
   expect(loadedAssets.some((name) => name.endsWith("/assets/life-stages-v2.png"))).toBe(true);
-  expect(loadedAssets.some((name) => name.endsWith("/assets/interiors-v2.png"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/interiors-v3.png"))).toBe(true);
+  expect(loadedAssets.some((name) => name.endsWith("/assets/weather-seasons-v1.png"))).toBe(true);
 
   const initialZoom = Number(await world.getAttribute("data-camera-zoom"));
   await page.locator("#zoom-in").click();
@@ -86,19 +87,33 @@ test("the live town is readable, interactive, and nonblank", async ({ page }, te
   await page.locator("#explore-close").click();
   await expect(page).not.toHaveURL(/#\/explore\//);
 
-  const storyToggle = page.locator("#story-toggle");
-  if (await storyToggle.isVisible()) await storyToggle.click();
-  await page.locator('[data-story-tab="property"]').click();
-  await expect(page.locator(".place-card").first()).toBeVisible();
-  await expect(page.locator(".place-card button").first()).toContainText(/focus/i);
-  if (testInfo.project.name === "1024x600") await page.waitForTimeout(5_250);
-  await page.locator(".place-card button").first().click();
-  await expect(page.locator("#interior-view")).toBeVisible();
-  await expect(world).toHaveAttribute("data-focused-location", /.+/);
-  await page.locator("#interior-close").click();
-  if (await storyToggle.isVisible()) await storyToggle.click();
-  await page.locator('[data-story-tab="seasons"]').click();
-  await expect(page.locator("[data-open-archive]")).toBeVisible();
+  await expect(page.locator(".story-rail")).toHaveCount(0);
+  await page.locator('[data-explore="places"]').click();
+  await expect(page.locator(".property-directory-card .building-thumb").first()).toBeVisible();
+  await expect(page.locator(".property-directory-card .card-totals").first()).toContainText(/items/i);
+  const publicState = await (await page.request.get("/api/v3/state")).json();
+  const occupiedProperty = publicState.properties.find((property: { slug?: string; inside?: unknown[]; inventoryItems?: number }) => property.slug && property.inside?.length && property.inventoryItems);
+  expect(occupiedProperty).toBeTruthy();
+  await page.goto(`/#/property/${encodeURIComponent(occupiedProperty.slug)}`);
+  await expect(page.locator("#explore-view")).toBeVisible();
+  await expect(page.locator(".property-interior .interior-actor")).toHaveCount(occupiedProperty.inside.length);
+  await expect(page.locator(".property-interior .interior-actor-sprite").first()).toBeVisible();
+  expect(await page.locator(".property-interior .interior-actor-sprite").first().evaluate((element) => getComputedStyle(element).backgroundImage)).toMatch(/residents|life-stages/);
+  const firstItemIcon = page.locator("#explore-content .inventory-grid .item-icon").first();
+  await page.locator("#explore-content").evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect(firstItemIcon).toBeVisible();
+  expect(await firstItemIcon.evaluate((element) => getComputedStyle(element).backgroundImage)).toContain("inventory-items-v1.png");
+  await page.locator("#explore-close").click();
+
+  await page.locator('[data-explore="analytics"]').click();
+  await expect(page.locator(".analytics-hero")).toContainText("Analytics Lab");
+  await expect(page.locator(".analytics-grid .bar-chart").first()).toBeVisible();
+  await expect(page.locator(".analytics-grid .line-chart").first()).toBeVisible();
+  await page.locator("#explore-close").click();
+
+  await expect(page.locator("#map-vote-trigger")).toBeVisible();
+  await expect(world).toHaveAttribute("data-season", /spring|summer|fall|winter/);
+  await expect(world).toHaveAttribute("data-weather", /.+/);
 
   await page.locator("#archive-open").click();
   await expect(page.locator("#archive-view")).toBeVisible();

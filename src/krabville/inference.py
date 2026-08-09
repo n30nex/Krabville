@@ -316,7 +316,13 @@ def _reserve_attempt(
             raise BudgetExhausted("season call budget exhausted")
         if int(tokens) + 8000 > settings.token_guard:
             raise BudgetExhausted("season token guard reached")
-        attempt = int(current_job["attempts"]) + 1
+        recorded_attempt = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(attempt_number),0) FROM model_usage WHERE job_id=?",
+                (job["id"],),
+            ).fetchone()[0]
+        )
+        attempt = max(int(current_job["attempts"]), recorded_attempt) + 1
         cursor = connection.execute(
             """
             INSERT INTO model_usage(
@@ -361,8 +367,18 @@ def process_one(connection: sqlite3.Connection, settings: Settings, provider: Pr
     job = _lease_job(connection)
     if not job:
         return False
-    all_attempts = ((settings.primary_model, "low"), (settings.fallback_model, "high"))
-    attempts = all_attempts[min(int(job["attempts"]), len(all_attempts)):]
+    all_attempts = (
+        (settings.primary_model, settings.primary_reasoning),
+        (settings.fallback_model, settings.fallback_reasoning),
+    )
+    recorded_attempts = int(
+        connection.execute(
+            "SELECT COALESCE(MAX(attempt_number),0) FROM model_usage WHERE job_id=?",
+            (job["id"],),
+        ).fetchone()[0]
+    )
+    used_attempts = max(int(job["attempts"]), recorded_attempts)
+    attempts = all_attempts[min(used_attempts, len(all_attempts)):]
     last_error = "provider_failed"
     for model, reasoning in attempts:
         try:

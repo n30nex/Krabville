@@ -134,11 +134,40 @@ CATALOG: tuple[tuple[Any, ...], ...] = tuple(sum([
 ], []))
 
 
+INTERIOR_VARIANTS = {
+    "Anchor House": 0,
+    "Rose House": 1,
+    "Birch House": 2,
+    "Lantern House": 3,
+    "Post House": 4,
+    "Willow House": 5,
+    "Blue Kettle Cafe": 6,
+    "Community House": 7,
+    "Dockside Studio": 8,
+    "Harbour Library": 9,
+    "Harbour Works": 10,
+    "Krabville Credit Union": 11,
+    "Krabville School": 12,
+    "Lagoon Health Centre": 13,
+    "Lagoon General Store": 14,
+    "Tideway Gardens": 15,
+    "Cedar Cottage": 16,
+    "Harbour Pharmacy": 17,
+    "Tidepool House": 18,
+    "Tideway Outfitters": 19,
+    "Harbour Shelter": 20,
+    "Maple Row House": 21,
+    "Lagoon Ferry": 22,
+    "North Dock Flat": 23,
+    "Owen's Care Service": 24,
+}
+
+
 SHOP_DEFINITIONS = (
     ("lagoon-general-store", "Lagoon General Store", "general", "Post Office", "shop", 14),
-    ("harbour-pharmacy", "Harbour Pharmacy", "pharmacy", "Lagoon Clinic", "shop", 15),
-    ("tideway-outfitters", "Tideway Outfitters", "outfitter", "Ferry Dock", "shop", 16),
-    ("lagoon-ferry", "Lagoon Ferry", "shipping", "Ferry Dock", "office", 18),
+    ("harbour-pharmacy", "Harbour Pharmacy", "pharmacy", "Lagoon Clinic", "shop", 17),
+    ("tideway-outfitters", "Tideway Outfitters", "outfitter", "Ferry Dock", "shop", 19),
+    ("lagoon-ferry", "Lagoon Ferry", "shipping", "Ferry Dock", "office", 22),
 )
 
 SPECIALTY_BUSINESSES = {
@@ -253,8 +282,12 @@ def seed_commerce(connection: sqlite3.Connection) -> None:
           slug,name,property_type,address,exterior_key,interior_key,resident_capacity,
           business_capacity,market_value_cents,status,created_tick,map_location,interior_variant
         ) VALUES('harbour-shelter','Harbour Shelter','shelter','14 Safe Harbour Lane',
-          'harbour-shelter','shelter',12,0,9800000,'available',0,'Harbour Shelter',17)
+          'harbour-shelter','shelter',12,0,9800000,'available',0,'Harbour Shelter',20)
         """
+    )
+    connection.executemany(
+        "UPDATE properties SET interior_variant=? WHERE name=?",
+        ((variant, name) for name, variant in INTERIOR_VARIANTS.items()),
     )
 
     season = connection.execute("SELECT id,current_tick FROM seasons ORDER BY number DESC LIMIT 1").fetchone()
@@ -1033,8 +1066,8 @@ def _business_life(connection: sqlite3.Connection, season_id: int, day: int, tic
     if candidates and active_count < 24 and rng.random() < 0.34:
         founder = rng.choice(candidates)
         first = str(founder["name"]).split()[0]
-        concepts = (("provisions", "Provisions", "shop"), ("repairs", "Repair Co-op", "shop"), ("studio", "Creative Studio", "office"), ("care", "Care Service", "office"))
-        concept, suffix, property_type = rng.choice(concepts)
+        concepts = (("provisions", "Provisions", "shop", 14), ("repairs", "Repair Co-op", "shop", 10), ("studio", "Creative Studio", "office", 8), ("care", "Care Service", "office", 24))
+        concept, suffix, property_type, interior_variant = rng.choice(concepts)
         slug = f"venture-s{season_id}-d{day}-{founder['id']}"
         name = f"{first}'s {suffix}"
         property_id = int(connection.execute(
@@ -1044,7 +1077,7 @@ def _business_life(connection: sqlite3.Connection, season_id: int, day: int, tic
               business_capacity,market_value_cents,status,created_season_id,created_tick,map_location,interior_variant
             ) VALUES(?,?,?,?,?,'shop',0,6,8500000,'occupied',?,?, 'Town Square',?) RETURNING id
             """,
-            (f"property-{slug}", name, property_type, "Town Square", slug, season_id, tick, 17 + active_count % 7),
+            (f"property-{slug}", name, property_type, "Town Square", slug, season_id, tick, interior_variant),
         ).fetchone()[0])
         business_id = int(connection.execute(
             """

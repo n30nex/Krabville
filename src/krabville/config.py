@@ -19,6 +19,11 @@ def _secret(name: str, file_name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def _reasoning(name: str, default: str) -> str:
+    value = os.environ.get(name, default).strip().lower()
+    return value if value in {"none", "minimal", "low", "medium", "high", "xhigh", "max"} else default
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     data_dir: Path
@@ -32,7 +37,9 @@ class Settings:
     tick_seconds: float
     fake_provider: bool
     primary_model: str
+    primary_reasoning: str
     fallback_model: str
+    fallback_reasoning: str
     call_limit: int
     token_guard: int
     inference_timeout: int
@@ -72,9 +79,11 @@ class Settings:
             tick_seconds=max(0.01, float(os.environ.get("KRABVILLE_TICK_SECONDS", "12.5"))),
             fake_provider=_boolean("KRABVILLE_FAKE_PROVIDER", True),
             primary_model=os.environ.get("KRABVILLE_PRIMARY_MODEL", "gpt-5.3-codex-spark"),
+            primary_reasoning=_reasoning("KRABVILLE_PRIMARY_REASONING", "low"),
             fallback_model=os.environ.get("KRABVILLE_FALLBACK_MODEL", "gpt-5.6-luna"),
+            fallback_reasoning=_reasoning("KRABVILLE_FALLBACK_REASONING", "low"),
             call_limit=max(1, int(os.environ.get("KRABVILLE_CALL_LIMIT", "150"))),
-            token_guard=max(8000, int(os.environ.get("KRABVILLE_TOKEN_GUARD", "500000"))),
+            token_guard=max(8000, int(os.environ.get("KRABVILLE_TOKEN_GUARD", "1500000"))),
             inference_timeout=max(10, int(os.environ.get("KRABVILLE_INFERENCE_TIMEOUT", "180"))),
             voter_secret=_secret(
                 "KRABVILLE_VOTER_SECRET",

@@ -83,23 +83,33 @@ def current_season(connection: sqlite3.Connection) -> sqlite3.Row | None:
     return _season_row(connection)
 
 
-def _weather(seed_hex: str, day: int) -> dict[str, Any]:
-    rng = _rng(seed_hex, "weather", day)
-    choices = (
-        ("clear", 24, 8),
-        ("clear", 26, 11),
-        ("cloudy", 22, 14),
-        ("rain", 19, 18),
-        ("windy", 21, 27),
-        ("storm", 20, 34),
-        ("fog", 18, 7),
-    )
+def _weather(seed_hex: str, day: int, season_number: int = 1) -> dict[str, Any]:
+    rng = _rng(seed_hex, "weather", season_number, day)
+    season_name = ("spring", "summer", "fall", "winter")[(season_number - 1) % 4]
+    choices = {
+        "spring": (
+            ("clear", 15, 10), ("cloudy", 12, 15), ("rain", 10, 19),
+            ("rain", 13, 14), ("windy", 11, 27), ("storm", 14, 36), ("fog", 8, 7),
+        ),
+        "summer": (
+            ("clear", 24, 8), ("clear", 27, 11), ("cloudy", 22, 14),
+            ("rain", 19, 18), ("windy", 21, 27), ("storm", 23, 34), ("fog", 18, 7),
+        ),
+        "fall": (
+            ("clear", 15, 12), ("cloudy", 12, 17), ("rain", 10, 22),
+            ("windy", 9, 32), ("windy", 13, 25), ("storm", 11, 39), ("fog", 7, 9),
+        ),
+        "winter": (
+            ("clear", -6, 9), ("cloudy", -4, 14), ("snow", -7, 18),
+            ("snow", -3, 24), ("first-snow", -1, 13), ("windy", -10, 31), ("fog", -5, 8),
+        ),
+    }[season_name]
     condition, base, wind = rng.choice(choices)
     return {
         "condition": condition,
         "temperatureC": base + rng.randint(-3, 3),
         "windKmh": max(2, wind + rng.randint(-4, 4)),
-        "season": "summer",
+        "season": season_name,
     }
 
 
@@ -269,7 +279,7 @@ def start_season(
               target_ticks,model_locked,weather_json
             ) VALUES(?,'running',?,?,?,?,?,0,?)
             """,
-            (number, now, now, seed_hex, commitment, TARGET_TICKS, dumps(_weather(seed_hex, 0))),
+            (number, now, now, seed_hex, commitment, TARGET_TICKS, dumps(_weather(seed_hex, 0, number))),
         )
         season_id = int(cursor.lastrowid)
         initialize_resident_state(connection, season_id, prior_season_id)
@@ -407,7 +417,7 @@ def _action_for(
     work_window = 8.5 <= hour < 12 or 13 <= hour < 17.5
     sleep_window = hour >= 22 or hour < 6
     evening = 17 <= hour < 22
-    harsh_weather = weather.get("condition") in {"rain", "storm", "fog", "first-snow"}
+    harsh_weather = weather.get("condition") in {"rain", "storm", "fog", "snow", "first-snow"}
     options: list[tuple[float, str, str]] = [
         (
             (100 - energy) * 1.25 + (95 if sleep_window else 0),
@@ -1457,7 +1467,7 @@ def _local_chronicle(connection: sqlite3.Connection, season: sqlite3.Row, day: i
 
 def _new_day(connection: sqlite3.Connection, season: sqlite3.Row, day: int) -> None:
     catalyst = str(season["next_catalyst_slug"] or "") or None
-    weather = _weather(season["seed_hex"], day)
+    weather = _weather(season["seed_hex"], day, int(season["number"]))
     connection.execute(
         "UPDATE seasons SET current_day=?,world_minutes=0,next_catalyst_slug=NULL,weather_json=? WHERE id=?",
         (day, dumps(weather), season["id"]),

@@ -13,7 +13,6 @@ import {
   Map as MapIcon,
   MessageCircle,
   PackageOpen,
-  PanelRightOpen,
   Phone,
   Radio,
   ShoppingBasket,
@@ -32,28 +31,30 @@ import "./style.css";
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("app root missing");
 
+const INTERIOR_GRID_SIZE = 5;
+const INTERIOR_FRAME_COUNT = INTERIOR_GRID_SIZE * INTERIOR_GRID_SIZE;
+
 app.innerHTML = `
   <div class="shell">
     <header class="topbar">
       <button class="icon-button mobile-only" id="roster-toggle" aria-label="Open residents"><i data-lucide="users"></i></button>
       <div class="brand-mark" aria-hidden="true">K</div>
       <div class="brand-copy"><strong>Krabville</strong><span>Lagoon social simulation</span></div>
+      <nav class="top-nav" aria-label="Explore Krabville">
+        <button class="active" id="map-home" aria-label="Live map"><i data-lucide="map"></i><span>Map</span></button>
+        <button data-explore="residents"><i data-lucide="users"></i><span>People</span></button>
+        <button data-explore="places"><i data-lucide="building-2"></i><span>Places</span></button>
+        <button data-explore="bank"><i data-lucide="landmark"></i><span>Economy</span></button>
+        <button data-explore="analytics"><i data-lucide="activity"></i><span>Analytics</span></button>
+        <button data-explore="story"><i data-lucide="book-open"></i><span>Story</span></button>
+        <button id="archive-open"><i data-lucide="archive"></i><span>Seasons</span></button>
+      </nav>
       <div class="season-clock" id="season-clock">Waiting for the town...</div>
       <div class="status-cluster">
         <div class="live-state" id="live-state"><span></span><b>Connecting</b></div>
         <div class="budget-mini" id="budget-mini"></div>
-        <button class="command-button" id="archive-open"><i data-lucide="archive"></i><span>Seasons</span></button>
       </div>
     </header>
-    <nav class="command-dock" aria-label="Explore Krabville">
-      <button data-explore="residents"><i data-lucide="users"></i><span>Residents</span></button>
-      <button data-explore="homes"><i data-lucide="house"></i><span>Homes</span></button>
-      <button data-explore="buildings"><i data-lucide="building-2"></i><span>Buildings</span></button>
-      <button data-explore="shops"><i data-lucide="store"></i><span>Shops</span></button>
-      <button data-explore="bank"><i data-lucide="landmark"></i><span>Bank</span></button>
-      <button data-explore="calls"><i data-lucide="phone"></i><span>Calls</span></button>
-      <button data-explore="story"><i data-lucide="book-open"></i><span>Story</span></button>
-    </nav>
     <main class="workspace">
       <aside class="resident-rail" id="resident-rail" aria-label="Krabville residents">
         <div class="rail-heading"><span>Residents</span><b id="resident-count">0</b></div>
@@ -64,10 +65,13 @@ app.innerHTML = `
         <div class="map-tools" aria-label="Map controls">
           <button class="icon-button" id="zoom-in" aria-label="Zoom in"><i data-lucide="zoom-in"></i></button>
           <button class="icon-button" id="zoom-out" aria-label="Zoom out"><i data-lucide="zoom-out"></i></button>
-          <button class="icon-button" id="map-fit" aria-label="Show the whole Lagoon"><i data-lucide="locate-fixed"></i></button>
+          <button class="icon-button" id="map-fit" aria-label="Center the Lagoon"><i data-lucide="locate-fixed"></i></button>
         </div>
         <div class="weather-pill" id="weather-pill"><i data-lucide="cloud-sun"></i><span>Weather pending</span></div>
-        <button class="story-toggle" id="story-toggle"><i data-lucide="panel-right-open"></i><span>Town</span></button>
+        <section class="map-vote" id="map-vote" aria-label="Visitor vote">
+          <button class="map-vote-trigger" id="map-vote-trigger"><i data-lucide="vote"></i><span>Vote pending</span><small></small></button>
+          <div class="map-vote-panel" id="map-vote-panel" hidden></div>
+        </section>
         <aside class="resident-peek" id="resident-peek" role="tooltip" hidden></aside>
         <aside class="interior-view" id="interior-view" hidden aria-label="Building interior">
           <div class="interior-head"><div><span>Inside</span><b id="interior-name">Building</b></div><button class="icon-button" id="interior-close" aria-label="Close interior"><i data-lucide="x"></i></button></div>
@@ -77,19 +81,6 @@ app.innerHTML = `
         </aside>
         <div class="live-ticker"><span class="ticker-signal"></span><b>LIVE</b><p id="live-ticker">Connecting to the town ledger...</p></div>
       </section>
-      <aside class="story-rail" id="story-rail">
-        <div class="story-tabs" role="tablist">
-          <button class="active" data-story-tab="ledger"><i data-lucide="activity"></i><span>Ledger</span></button>
-          <button data-story-tab="households"><span>Households</span></button>
-          <button data-story-tab="economy"><span>Economy</span></button>
-          <button data-story-tab="family"><span>Family</span></button>
-          <button data-story-tab="property"><span>Property</span></button>
-          <button data-story-tab="events"><span>Events</span></button>
-          <button data-story-tab="vote"><i data-lucide="vote"></i><span>Vote</span></button>
-          <button data-story-tab="seasons"><i data-lucide="archive"></i><span>Seasons</span></button>
-        </div>
-        <div class="story-content" id="story-content"></div>
-      </aside>
     </main>
   </div>
   <section class="side-drawer" id="dossier" hidden aria-label="Resident dossier">
@@ -122,7 +113,6 @@ createIcons({
     Map: MapIcon,
     MessageCircle,
     PackageOpen,
-    PanelRightOpen,
     Phone,
     Radio,
     ShoppingBasket,
@@ -266,11 +256,10 @@ const shortModel = (model: string): string =>
 let state: KrabvilleState | null = null;
 let initialRouteApplied = false;
 let selectedSlug: string | null = null;
-let storyTab = "ledger";
-let storyMarkup = "";
-let storyMarkupTab = "";
 let lastFreshAt = 0;
 let refreshPending: Promise<void> | null = null;
+let activePropertySlug = "";
+let mapVoteOpen = false;
 
 let world: import("./game").LagoonWorld | null = null;
 let worldLoading: Promise<import("./game").LagoonWorld> | null = null;
@@ -304,8 +293,9 @@ function renderTop(value: KrabvilleState): void {
   `;
   const weather = season?.weather;
   byId("weather-pill").querySelector("span")!.textContent = weather
-    ? `${weather.condition ?? "clear"}  ${weather.temperatureC ?? "--"} C  ${weather.windKmh ?? "--"} km/h`
+    ? `${titleCase(weather.season ?? "summer")} | ${weather.condition ?? "clear"}  ${weather.temperatureC ?? "--"} C  ${weather.windKmh ?? "--"} km/h`
     : "Weather pending";
+  byId("map-stage").dataset.season = weather?.season ?? "summer";
 }
 
 function renderRoster(value: KrabvilleState): void {
@@ -380,32 +370,110 @@ function hideResidentPeek(): void {
 
 function interiorFrame(location: string): number {
   const name = location.toLowerCase();
-  if (/clinic|hospital|health/.test(name)) return 7;
-  if (/school|college|library/.test(name)) return 4;
-  if (/daycare|nursery|child/.test(name)) return 5;
-  if (/bank|town hall|office/.test(name)) return 6;
-  if (/cafe|restaurant/.test(name)) return 8;
+  if (/clinic|hospital|health/.test(name)) return 13;
+  if (/school|college/.test(name)) return 12;
+  if (/library/.test(name)) return 9;
+  if (/daycare|nursery|child|care service/.test(name)) return 24;
+  if (/bank|credit union/.test(name)) return 11;
+  if (/town hall|community|office/.test(name)) return 7;
+  if (/cafe|restaurant/.test(name)) return 6;
   if (/workshop|boatworks|repair|radio/.test(name)) return 10;
-  if (/market|shop|store/.test(name)) return 11;
-  if (/bed|apartment/.test(name)) return 2;
-  return /house|home/.test(name) ? 0 : 9;
+  if (/pharmacy/.test(name)) return 17;
+  if (/outfitter/.test(name)) return 19;
+  if (/market|shop|store/.test(name)) return 14;
+  if (/ferry/.test(name)) return 22;
+  if (/shelter/.test(name)) return 20;
+  if (/bed|apartment|flat/.test(name)) return 23;
+  return /house|home|cottage/.test(name) ? 0 : 8;
+}
+
+function interiorPosition(frame: number): [number, number] {
+  const normalized = ((frame % INTERIOR_FRAME_COUNT) + INTERIOR_FRAME_COUNT) % INTERIOR_FRAME_COUNT;
+  const step = 100 / (INTERIOR_GRID_SIZE - 1);
+  return [(normalized % INTERIOR_GRID_SIZE) * step, Math.floor(normalized / INTERIOR_GRID_SIZE) * step];
+}
+
+type InteriorResident = { slug: string; name: string; activity: string; mood?: string };
+
+const LIFE_STAGE_SPRITE_ROWS: Record<string, number> = { baby: 0, child: 1, teen: 2, senior: 3 };
+
+function stableHash(value: string): number {
+  let hash = 2166136261;
+  for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return hash >>> 0;
+}
+
+function interiorActorMarkup(occupants: InteriorResident[], sceneKey: string): string {
+  return `<div class="interior-live-actors" data-scene="${h(sceneKey)}">${occupants.map((occupant, index) => {
+    const resident = state?.residents.find((item) => item.slug === occupant.slug);
+    const rosterIndex = Math.max(0, state?.residents.findIndex((item) => item.slug === occupant.slug) ?? stableHash(occupant.slug) % 12);
+    const lifeStage = resident?.lifeStage?.toLowerCase() ?? "adult";
+    const lifeRow = LIFE_STAGE_SPRITE_ROWS[lifeStage];
+    const variant = Math.abs(resident?.spriteVariant ?? rosterIndex) % 12;
+    const atlas = lifeRow === undefined ? (variant < 6 ? "resident-a" : "resident-b") : "life-stage";
+    const row = lifeRow ?? variant % 6;
+    const rowCount = lifeRow === undefined ? 6 : 4;
+    const rowPosition = row * (100 / (rowCount - 1));
+    const activity = occupant.activity.toLowerCase();
+    const resting = /sleep|nap|rest|bed/.test(activity);
+    const zone: [number, number] = /cook|meal|eat|bottle|breakfast|lunch|dinner/.test(activity) ? [52, 65]
+      : /wash|bath|hygiene|shower/.test(activity) ? [74, 61]
+        : /read|study|homework|lesson/.test(activity) ? [31, 59]
+          : /care|play|visit|talk|social|meeting/.test(activity) ? [47, 72]
+            : /work|shift|shop|stock|repair|build|write/.test(activity) ? [64, 64]
+              : resting ? [72, 55] : [40, 69];
+    const hash = stableHash(`${sceneKey}:${occupant.slug}`);
+    const spreadX = ((hash % 17) - 8) + (index % 3) * 7;
+    const spreadY = (((hash >>> 5) % 11) - 5) + Math.floor(index / 3) * 6;
+    const left = Math.max(19, Math.min(81, zone[0] + spreadX));
+    const top = Math.max(43, Math.min(80, zone[1] + spreadY));
+    const walkX = ((hash >>> 9) % 2 ? 1 : -1) * (14 + (hash % 13));
+    const walkY = ((hash >>> 12) % 2 ? 1 : -1) * (4 + (hash % 8));
+    const duration = 5 + (hash % 5);
+    const firstName = occupant.name.split(" ")[0] ?? occupant.name;
+    return `<button class="interior-actor ${resting ? "is-resting" : "is-moving"}" data-resident="${h(occupant.slug)}" style="--actor-left:${left}%;--actor-top:${top}%;--actor-walk-x:${walkX}px;--actor-walk-y:${walkY}px;--actor-duration:${duration}s;--actor-delay:-${hash % 7}s;--sprite-y:${rowPosition}%" aria-label="${h(`${occupant.name}: ${occupant.activity}`)}" title="${h(`${occupant.name} - ${occupant.activity}`)}"><span class="interior-actor-action">${h(occupant.activity)}</span><span class="interior-actor-sprite ${atlas}" aria-hidden="true"></span><b>${h(firstName)}</b></button>`;
+  }).join("")}</div>`;
+}
+
+function insideListMarkup(occupants: InteriorResident[]): string {
+  return occupants.map((resident) => `<button data-resident="${h(resident.slug)}"><b>${h(resident.name)}</b><span>${h(resident.activity)}</span><em>${h(resident.mood ?? state?.residents.find((item) => item.slug === resident.slug)?.mood ?? "active")}</em></button>`).join("") || `<div class="empty-state">The building is empty.</div>`;
+}
+
+function syncInteriorViews(value: KrabvilleState): void {
+  if (currentInteriorSlug && !byId<HTMLElement>("interior-view").hidden) {
+    const property = value.properties?.find((item) => item.slug === currentInteriorSlug);
+    const occupants = property?.inside ?? [];
+    byId("interior-art").innerHTML = interiorActorMarkup(occupants, currentInteriorSlug);
+    byId("interior-occupants").innerHTML = occupants.length
+      ? occupants.map((resident) => `<button data-resident="${h(resident.slug)}"><b>${h(resident.name)}</b><span>${h(resident.activity)}</span></button>`).join("")
+      : `<span>Nobody is inside right now.</span>`;
+  }
+  if (!activePropertySlug) return;
+  const property = value.properties?.find((item) => item.slug === activePropertySlug);
+  const actorLayer = byId("explore-content").querySelector<HTMLElement>(".interior-live-actors");
+  if (!property || !actorLayer) return;
+  actorLayer.outerHTML = interiorActorMarkup(property.inside ?? [], activePropertySlug);
+  const count = byId("explore-content").querySelector<HTMLElement>("[data-inside-count]");
+  const list = byId("explore-content").querySelector<HTMLElement>(".inside-list");
+  if (count) count.textContent = String(property.inside?.length ?? 0);
+  if (list) list.innerHTML = insideListMarkup(property.inside ?? []);
 }
 
 let currentInteriorSlug = "";
 
 function showInterior(location: string): void {
   const property = state?.properties?.find((item) => item.name === location || item.mapLocation === location);
-  const frame = property?.interiorVariant !== undefined ? ((property.interiorVariant % 12) + 12) % 12 : interiorFrame(location);
-  const column = frame % 4;
-  const row = Math.floor(frame / 4);
+  const frame = property?.interiorVariant ?? interiorFrame(location);
+  const [x, y] = interiorPosition(frame);
   const art = byId<HTMLElement>("interior-art");
-  art.style.setProperty("--interior-x", `${column * 100 / 3}%`);
-  art.style.setProperty("--interior-y", `${row * 50}%`);
+  art.style.setProperty("--interior-x", `${x}%`);
+  art.style.setProperty("--interior-y", `${y}%`);
   const name = property?.name ?? location;
   art.setAttribute("aria-label", `${name} interior cutaway`);
   byId("interior-name").textContent = name;
   currentInteriorSlug = property?.slug ?? "";
   const occupants = property?.inside ?? [];
+  art.innerHTML = interiorActorMarkup(occupants, currentInteriorSlug || name);
   byId("interior-occupants").innerHTML = occupants.length
     ? occupants.map((resident) => `<button data-resident="${h(resident.slug)}"><b>${h(resident.name)}</b><span>${h(resident.activity)}</span></button>`).join("")
     : `<span>Nobody is inside right now.</span>`;
@@ -469,6 +537,47 @@ function renderPoll(value: KrabvilleState): string {
         </button>`;
       }).join("")}
     </div>`;
+}
+
+function countdownLabel(ticks: number): string {
+  const seconds = Math.max(0, Math.ceil(ticks * 12.5));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
+
+function renderMapVote(value: KrabvilleState): void {
+  const trigger = byId<HTMLButtonElement>("map-vote-trigger");
+  const panel = byId<HTMLElement>("map-vote-panel");
+  const poll = value.poll;
+  const season = value.season;
+  const storedChoice = poll ? localStorage.getItem(`kv-vote-${poll.id}`) : null;
+  const selected = poll?.options.find((option) => option.choiceId === storedChoice);
+  trigger.className = "map-vote-trigger";
+  trigger.disabled = !poll || poll.status !== "open";
+  if (!season) {
+    trigger.querySelector("span")!.textContent = "Voting offline";
+    trigger.querySelector("small")!.textContent = "No active season";
+  } else if (poll?.status === "open") {
+    const remaining = Math.max(0, poll.closesTick - season.tick);
+    trigger.classList.add(selected ? "chosen" : "attention");
+    trigger.querySelector("span")!.textContent = selected ? selected.title : "Vote on tomorrow";
+    trigger.querySelector("small")!.textContent = selected ? `Choice saved | ${countdownLabel(remaining)} left` : `${countdownLabel(remaining)} left`;
+  } else {
+    const dayStart = Math.floor(season.tick / 288) * 288;
+    let nextOpen = dayStart + 24;
+    if (nextOpen <= season.tick) nextOpen += 288;
+    const winner = poll?.options.find((option) => option.winner);
+    trigger.querySelector("span")!.textContent = winner ? `Next: ${winner.title}` : "Next visitor vote";
+    trigger.querySelector("small")!.textContent = season.day >= 6 ? "Next season" : `opens in ${countdownLabel(nextOpen - season.tick)}`;
+  }
+  if (!poll || poll.status !== "open" || !mapVoteOpen) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = `<header><div><span>Visitor decision</span><b>${h(poll.question ?? "Choose tomorrow's catalyst")}</b></div><button type="button" data-close-vote aria-label="Close vote"><i data-lucide="x"></i></button></header><div>${poll.options.map((option) => `<button class="map-vote-choice ${option.choiceId === storedChoice ? "selected" : ""}" data-map-choice="${h(option.choiceId)}"><span>${h(option.category)}</span><b>${h(option.title)}</b><small>${h(option.preview)}</small></button>`).join("")}</div>`;
+  createIcons({ icons: { X } });
 }
 
 function renderDocket(value: KrabvilleState): string {
@@ -541,25 +650,6 @@ function renderLedger(value: KrabvilleState): string {
   return `${renderLiveStory(value)}${renderDocket(value)}`;
 }
 
-function renderStory(value: KrabvilleState): void {
-  const content = byId("story-content");
-  const views: Record<string, () => string> = {
-    ledger: () => renderLedger(value),
-    households: () => renderHouseholds(value),
-    economy: () => renderEconomy(value),
-    family: () => renderFamilies(value),
-    property: () => renderProperty(value),
-    events: () => renderEvents(value),
-    vote: () => renderPoll(value),
-    seasons: () => renderSeasons(value),
-  };
-  const nextMarkup = (views[storyTab] ?? views.ledger!)();
-  if (storyMarkupTab === storyTab && storyMarkup === nextMarkup) return;
-  storyMarkupTab = storyTab;
-  storyMarkup = nextMarkup;
-  content.innerHTML = nextMarkup;
-}
-
 function occupantNames(property: NonNullable<KrabvilleState["properties"]>[number]): string {
   return property.inside?.map((resident) => resident.name).join(", ")
     || property.occupants?.map((resident) => resident.name).join(", ")
@@ -586,50 +676,180 @@ function sparkline(values: number[]): string {
   return `<svg class="money-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Financial history"><polyline points="${points}"></polyline></svg>`;
 }
 
-function inventoryGrid(items: InventoryItem[]): string {
-  if (!items.length) return `<div class="empty-state">No goods recorded here.</div>`;
-  return `<div class="inventory-grid">${items.map((item) => `<article><span class="item-icon" data-item="${h(item.assetKey ?? "item")}">${h(item.name.slice(0, 2).toUpperCase())}</span><div><b>${h(item.name)}</b><small>${h(item.category)}</small></div><em>${item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}${item.price !== undefined ? ` | ${formatCad(item.price)}` : ""}</em></article>`).join("")}</div>`;
+function lineChart(series: Array<{ label: string; color: string; values: number[] }>, label: string): string {
+  const values = series.flatMap((item) => item.values);
+  if (!values.length) return `<div class="empty-chart">History begins after the next daily settlement.</div>`;
+  const low = Math.min(0, ...values);
+  const high = Math.max(1, ...values);
+  const lines = series.map((item) => {
+    const points = item.values.map((value, index) => {
+      const x = item.values.length === 1 ? 50 : (index * 100) / (item.values.length - 1);
+      const y = 94 - ((value - low) * 86) / Math.max(1, high - low);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    }).join(" ");
+    return `<polyline points="${points}" style="--series-color:${item.color}"></polyline>`;
+  }).join("");
+  const dots = series.map((item) => item.values.map((value, index) => {
+    const x = item.values.length === 1 ? 50 : (index * 100) / (item.values.length - 1);
+    const y = 94 - ((value - low) * 86) / Math.max(1, high - low);
+    return `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="1.35" style="--series-color:${item.color}"></circle>`;
+  }).join("")).join("");
+  return `<div class="chart-wrap"><svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${h(label)}"><path class="chart-grid" d="M0 25H100 M0 50H100 M0 75H100"></path>${lines}${dots}</svg><div class="chart-legend">${series.map((item) => `<span style="--series-color:${item.color}"><i></i>${h(item.label)}</span>`).join("")}</div></div>`;
 }
 
-function directoryProperties(kind: "homes" | "buildings"): string {
+function barChart(items: Array<{ label: string; value: number }>, formatter: (value: number) => string = (value) => Math.round(value).toLocaleString()): string {
+  const maximum = Math.max(1, ...items.map((item) => Math.max(0, item.value)));
+  return `<div class="bar-chart">${items.map((item) => {
+    const normalized = Math.max(0, item.value);
+    return `<div><span>${h(item.label)}</span><i><b style="width:${normalized ? Math.max(2, (100 * normalized) / maximum) : 0}%"></b></i><em>${h(formatter(item.value))}</em></div>`;
+  }).join("") || `<div class="empty-state">No samples yet.</div>`}</div>`;
+}
+
+function renderAnalytics(value: KrabvilleState): string {
+  const stageCounts = Object.entries(value.residents.reduce<Record<string, number>>((counts, resident) => {
+    const key = titleCase(resident.lifeStage ?? "adult");
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {})).map(([label, count]) => ({ label, value: count }));
+  const moodCounts = Object.entries(value.residents.reduce<Record<string, number>>((counts, resident) => {
+    const key = titleCase(resident.mood || "steady");
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {})).map(([label, count]) => ({ label, value: count })).sort((left, right) => right.value - left.value);
+  const needKeys = [...new Set(value.residents.flatMap((resident) => Object.keys(resident.needs)))];
+  const needs = needKeys.map((key) => ({
+    label: titleCase(key),
+    value: value.residents.reduce((sum, resident) => sum + needSatisfaction(resident, key), 0) / Math.max(1, value.residents.length),
+  })).sort((left, right) => left.value - right.value);
+  const locations = Object.entries(value.residents.reduce<Record<string, number>>((counts, resident) => {
+    counts[resident.location] = (counts[resident.location] ?? 0) + 1;
+    return counts;
+  }, {})).map(([label, count]) => ({ label, value: count })).sort((left, right) => right.value - left.value);
+  const economy = value.economy;
+  const history = economy?.history ?? [];
+  const relationships = value.analytics?.relationships;
+  const modelSeries = Object.entries(value.usage.models).map(([model, usage]) => ({ label: shortModel(model), value: usage.tokens }));
+  return `<div class="analytics-hero"><div><span>Krabville Analytics Lab</span><h3>Town pulse at Day ${(value.season?.day ?? 0) + 1}, ${formatTime(value.season?.worldMinutes ?? 0)}</h3><p>Live social, wellbeing, economy, inventory, activity, and model measurements from the public simulation ledger.</p></div><div class="analytics-live"><i></i><b>${value.season?.status ?? "ready"}</b><span>updated ${new Date(value.updatedAt).toLocaleTimeString()}</span></div></div>
+    <div class="analytics-kpis"><article><span>Residents</span><b>${value.residents.length}</b><small>${stageCounts.map((item) => `${item.value} ${item.label.toLowerCase()}`).join(" | ")}</small></article><article><span>Town net worth</span><b>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</b><small>${formatCad(economy?.totalDebt)} debt</small></article><article><span>Goods in shops</span><b>${Math.round(economy?.stockUnits ?? 0).toLocaleString()}</b><small>${economy?.catalogItems ?? 0} catalog items</small></article><article><span>Social activity</span><b>${relationships?.interactions ?? 0}</b><small>${relationships?.pairs ?? 0} relationship pairs</small></article><article><span>Story events</span><b>${value.townEvents?.length ?? value.events.length}</b><small>${value.conversations.length} conversations</small></article><article><span>Model calls</span><b>${value.usage.calls}</b><small>${value.usage.totalTokens.toLocaleString()} tokens</small></article></div>
+    <div class="analytics-grid">
+      <section><header><span>Population</span><b>Life stages</b></header>${barChart(stageCounts)}</section>
+      <section><header><span>Wellbeing</span><b>Average need satisfaction</b></header>${barChart(needs, (number) => `${Math.round(number)}%`)}</section>
+      <section><header><span>Mood</span><b>Residents now</b></header>${barChart(moodCounts)}</section>
+      <section><header><span>Occupancy</span><b>Where everyone is</b></header>${barChart(locations)}</section>
+      <section class="wide"><header><span>Economy</span><b>Daily town finances</b></header>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Town finances over time")}</section>
+      <section><header><span>Inventory</span><b>Units by category</b></header>${barChart((value.analytics?.inventoryByCategory ?? []).slice(0, 12).map((item) => ({ label: item.category, value: item.units })))}</section>
+      <section><header><span>Goods flow</span><b>Movement by type</b></header>${barChart((value.analytics?.movements ?? []).map((item) => ({ label: item.type, value: item.units })))}</section>
+      <section><header><span>Relationships</span><b>Town averages</b></header>${barChart([{ label: "Affinity", value: relationships?.affinity ?? 0 }, { label: "Trust", value: relationships?.trust ?? 0 }, { label: "Familiarity", value: relationships?.familiarity ?? 0 }, { label: "Tension", value: relationships?.tension ?? 0 }])}</section>
+      <section><header><span>Inference</span><b>Tokens by model</b></header>${barChart(modelSeries)}</section>
+    </div>
+    <div class="section-label"><span>Most active relationships</span><b>${value.analytics?.strongestConnections?.length ?? 0}</b></div><div class="comparison-table">${(value.analytics?.strongestConnections ?? []).map((pair) => `<article><b>${h(pair.residentA)} + ${h(pair.residentB)}</b><span>Affinity ${pair.affinity}</span><span>Trust ${pair.trust}</span><span>Tension ${pair.tension}</span><em>${pair.interactions} interactions</em></article>`).join("") || `<div class="empty-state">Relationships are still forming.</div>`}</div>`;
+}
+
+function inventoryGrid(items: InventoryItem[]): string {
+  if (!items.length) return `<div class="empty-state">No goods recorded here.</div>`;
+  return `<div class="inventory-grid">${items.map((item) => {
+    const index = Math.abs(item.assetIndex ?? stableHash(item.assetKey ?? item.name)) % 182;
+    const x = (index % 14) * (100 / 13);
+    const y = Math.floor(index / 14) * (100 / 12);
+    return `<article><span class="item-icon" data-item="${h(item.assetKey ?? "item")}" style="--item-x:${x}%;--item-y:${y}%" role="img" aria-label="${h(item.name)}"></span><div><b>${h(item.name)}</b><small>${h(item.category)}${item.condition !== undefined ? ` | ${item.condition}% condition` : ""}</small></div><em>${item.quantity.toLocaleString(undefined, { maximumFractionDigits: 1 })}${item.price !== undefined ? ` | ${formatCad(item.price)}` : ""}</em></article>`;
+  }).join("")}</div>`;
+}
+
+const PROPERTY_EXTERIOR_POINTS: Record<string, [number, number]> = {
+  "home-cedar-cottage": [576, 144],
+  "home-tidepool-house": [2384, 160],
+  "home-maple-row": [1360, 184],
+  "home-north-dock-flat": [2160, 960],
+  "home-harbour-family": [2448, 1744],
+  "home-garden-family": [288, 912],
+  "home-canal-family": [2704, 704],
+  "home-lighthouse-single": [1696, 400],
+  "home-market-single": [560, 736],
+  "home-willow-single": [824, 592],
+  "property-business-blue-kettle-cafe": [1040, 992],
+  "property-business-community-house": [1456, 720],
+  "property-business-harbour-library": [1328, 1136],
+  "property-business-krabville-credit-union": [1872, 1040],
+  "property-business-krabville-school": [2400, 1280],
+  "property-business-lagoon-field-lab": [1040, 712],
+  "property-business-lagoon-health-centre": [2008, 736],
+  "property-business-signal-house": [488, 384],
+  "property-business-tideway-gardens": [2896, 1312],
+  "property-lagoon-general-store": [2416, 960],
+  "property-harbour-pharmacy": [2384, 728],
+  "property-tideway-outfitters": [832, 1360],
+  "property-lagoon-ferry": [1488, 1680],
+  "harbour-shelter": [2160, 960],
+  "property-venture-s1-d0-30": [2080, 1216],
+};
+
+function buildingThumbnail(property: NonNullable<KrabvilleState["properties"]>[number] | undefined): string {
+  if (!property || typeof property.x !== "number" || typeof property.y !== "number" || !Number.isFinite(property.x) || !Number.isFinite(property.y)) return `<div class="building-thumb fallback" role="img" aria-label="Building exterior unavailable"><span aria-hidden="true">KV</span></div>`;
+  const [centerX, centerY] = PROPERTY_EXTERIOR_POINTS[property.slug ?? ""] ?? [property.x, property.y];
+  const cropWidth = 480;
+  const cropHeight = 270;
+  const left = Math.max(0, Math.min(3072 - cropWidth, centerX - cropWidth / 2));
+  const top = Math.max(0, Math.min(2048 - cropHeight, centerY - cropHeight / 2));
+  const x = (100 * left) / (3072 - cropWidth);
+  const y = (100 * top) / (2048 - cropHeight);
+  return `<div class="building-thumb" style="--building-x:${x}%;--building-y:${y}%" role="img" aria-label="${h(property.name)} exterior"></div>`;
+}
+
+function directoryProperties(kind: "homes" | "buildings" | "places"): string {
   if (!state) return "";
   const homes = new Set(["house", "apartment"]);
-  const properties = (state.properties ?? []).filter((property) => kind === "homes" ? homes.has(property.type ?? "") : !homes.has(property.type ?? ""));
+  const properties = (state.properties ?? []).filter((property) => kind === "places" || (kind === "homes" ? homes.has(property.type ?? "") : !homes.has(property.type ?? "")));
   return `<div class="directory-grid property-directory">${properties.map((property) => `
     <button class="directory-card property-directory-card" data-property="${h(property.slug ?? "")}" data-place="${h(property.name)}">
+      ${buildingThumbnail(property)}
       <span class="card-state ${h(property.status ?? "active")}">${h(property.type ?? "place")} | ${h(property.status ?? "active")}</span>
       <h3>${h(property.name)}</h3><p>${h(property.address ?? property.mapLocation ?? "Krabville")}</p>
-      <div class="occupancy-line"><b>${property.inside?.length ?? 0} inside</b><span>${h(occupantNames(property))}</span></div>
+      <div class="card-totals"><span><b>${property.inside?.length ?? 0}</b> inside</span><span><b>${property.inventoryItems ?? 0}</b> items</span><span><b>${Math.round(property.inventoryUnits ?? 0)}</b> units</span></div>
+      <div class="occupancy-line"><span>${h(occupantNames(property))}</span></div>
       <footer><span>${formatCad(property.value)}</span><em>${property.condition ?? 100}% condition</em></footer>
     </button>`).join("") || `<div class="empty-state large">No matching properties.</div>`}</div>`;
 }
 
+function exploreTabs(items: Array<[string, string]>, active: string): string {
+  return `<nav class="explore-tabs" aria-label="Detail sections">${items.map(([route, label]) => `<button class="${route === active ? "active" : ""}" data-explore="${route}">${label}</button>`).join("")}</nav>`;
+}
+
 function renderExplorer(section: string): string {
   if (!state) return `<div class="loading-state">Waiting for town state...</div>`;
+  const peopleTabs = exploreTabs([["residents", "Residents"], ["households", "Households"], ["family", "Families"], ["calls", "Calls"]], section);
+  const placeTabs = exploreTabs([["places", "All places"], ["homes", "Homes"], ["buildings", "Work & civic"], ["shops", "Shops"]], section);
+  const storyTabs = exploreTabs([["story", "Live story"], ["events", "Event ledger"], ["seasons", "Seasons"]], section);
   if (section === "residents") {
-    return `<div class="explore-intro"><div><span>Everybody in town</span><h3>${state.residents.length} living residents</h3></div><p>Open anyone for decisions, relationships, money, calls, possessions, home goods, and their permanent life ledger.</p></div>
+    return `${peopleTabs}<div class="explore-intro"><div><span>Everybody in town</span><h3>${state.residents.length} living residents</h3></div><p>Open anyone for decisions, relationships, money, calls, possessions, home goods, and their permanent life ledger.</p></div>
       <div class="directory-grid resident-directory">${state.residents.map((resident) => `
         <button class="directory-card resident-directory-card" data-resident="${h(resident.slug)}">
           <header><span style="--resident-color:${h(resident.color)}"></span><div><h3>${h(resident.name)}</h3><p>${h(resident.lifeStage ?? "resident")} | ${h(resident.role)}</p></div><em>${h(resident.mood)}</em></header>
           <b>${resident.indoors ? `Inside ${h(resident.building)}` : h(resident.activity)}</b>${miniNeedBars(resident)}
         </button>`).join("")}</div>`;
   }
-  if (section === "homes" || section === "buildings") return directoryProperties(section);
+  if (section === "households") return `${peopleTabs}${renderHouseholds(state)}`;
+  if (section === "family") return `${peopleTabs}${renderFamilies(state)}`;
+  if (section === "homes" || section === "buildings" || section === "places") return `${placeTabs}${directoryProperties(section)}`;
   if (section === "shops") {
     const businesses = state.economy?.businesses ?? [];
-    return `<div class="explore-intro"><div><span>Working economy</span><h3>${businesses.length} businesses</h3></div><p>Stock moves from the ferry into shops, residents buy what their households need, and shortages affect prices.</p></div>
-      <div class="directory-grid shop-directory">${businesses.map((business) => `<button class="directory-card shop-card" data-property="${h(business.propertySlug ?? "")}"><span class="card-state ${h(business.status ?? "active")}">${h(business.status ?? "active")}</span><h3>${h(business.name)}</h3><p>${h(business.industry ?? "local business")} | ${business.employees ?? 0} staff</p><div class="shop-metrics"><b>${formatCad(business.cash)}</b><span>${Math.round(business.inventoryUnits ?? 0)} goods</span><em>${business.lowStockItems ?? 0} low</em></div><footer><span>${formatCad(business.sales)} sales</span><em>${h(business.owner ?? "community-owned")}</em></footer></button>`).join("")}</div>`;
+    return `${placeTabs}<div class="explore-intro"><div><span>Working economy</span><h3>${businesses.length} businesses</h3></div><p>Stock moves from the ferry into shops, residents buy what their households need, and shortages affect prices.</p></div>
+      <div class="directory-grid shop-directory">${businesses.map((business) => `<button class="directory-card shop-card" data-property="${h(business.propertySlug ?? "")}">${buildingThumbnail(state?.properties?.find((property) => property.slug === business.propertySlug))}<span class="card-state ${h(business.status ?? "active")}">${h(business.status ?? "active")}</span><h3>${h(business.name)}</h3><p>${h(business.industry ?? "local business")} | ${business.employees ?? 0} staff</p><div class="shop-metrics"><b>${formatCad(business.cash)}</b><span>${business.inventoryItems ?? 0} items</span><span>${Math.round(business.inventoryUnits ?? 0)} units</span><em>${business.lowStockItems ?? 0} low</em></div><footer><span>${formatCad(business.sales)} sales</span><em>${h(business.owner ?? "community-owned")}</em></footer></button>`).join("")}</div>`;
   }
   if (section === "calls") {
     const calls = state.communications ?? [];
-    return `<div class="explore-intro"><div><span>Lagoon phone network</span><h3>${calls.length} recent calls</h3></div><p>Teen, adult, and senior residents call to talk, ask for help, arrange work, trade, and make plans.</p></div><div class="call-ledger">${calls.map((call) => `<article class="${call.visibility}"><span>${h(call.purpose)} | ${call.durationMinutes} min | ${h(call.visibility)}</span><h3><button data-resident="${h(call.caller)}">${h(call.callerName)}</button> called <button data-resident="${h(call.recipient)}">${h(call.recipientName)}</button></h3><p>${h(call.summary)}</p></article>`).join("") || `<div class="empty-state large">The first calls will appear during the next daytime phone window.</div>`}</div>`;
+    return `${peopleTabs}<div class="explore-intro"><div><span>Lagoon phone network</span><h3>${calls.length} recent calls</h3></div><p>Teen, adult, and senior residents call to talk, ask for help, arrange work, trade, and make plans.</p></div><div class="call-ledger">${calls.map((call) => `<article class="${call.visibility}"><span>${h(call.purpose)} | ${call.durationMinutes} min | ${h(call.visibility)}</span><h3><button data-resident="${h(call.caller)}">${h(call.callerName)}</button> called <button data-resident="${h(call.recipient)}">${h(call.recipientName)}</button></h3><p>${h(call.summary)}</p></article>`).join("") || `<div class="empty-state large">The first calls will appear during the next daytime phone window.</div>`}</div>`;
   }
-  if (section === "story") return `<div class="story-explorer">${renderEvents(state)}${renderDocket(state)}</div>`;
+  if (section === "story") return `${storyTabs}<div class="story-explorer">${renderLiveStory(state)}${renderDocket(state)}</div>`;
+  if (section === "events") return `${storyTabs}<div class="story-explorer">${renderEvents(state)}</div>`;
+  if (section === "seasons") return `${storyTabs}${renderSeasons(state)}`;
+  if (section === "analytics") return renderAnalytics(state);
   const economy = state.economy;
-  const values = economy?.history?.map((point) => point.netWorth) ?? [];
+  const history = economy?.history ?? [];
   const accounts = economy?.accounts ?? [];
-  return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town resident net worth</p></div>${sparkline(values)}</div>
+  const businesses = economy?.businesses ?? [];
+  return `<div class="bank-hero"><div><span>Krabville Credit Union</span><h3>${formatCad((economy?.totalCash ?? 0) + (economy?.totalInvestments ?? 0) - (economy?.totalDebt ?? 0))}</h3><p>Town net worth across ${accounts.length} resident, household, and business accounts</p></div>${lineChart([{ label: "Net worth", color: "#60d394", values: history.map((point) => point.netWorth) }, { label: "Cash", color: "#63d8e3", values: history.map((point) => point.cash) }, { label: "Debt", color: "#ff6b6b", values: history.map((point) => point.debt) }, { label: "Investments", color: "#ffc857", values: history.map((point) => point.investments) }], "Krabville financial history")}</div>
     <div class="metric-grid bank-metrics"><article><span>Liquid cash</span><b>${formatCad(economy?.totalCash)}</b></article><article><span>Investments</span><b>${formatCad(economy?.totalInvestments)}</b></article><article><span>Debt</span><b>${formatCad(economy?.totalDebt)}</b></article><article><span>Median worth</span><b>${formatCad(economy?.medianNetWorth)}</b></article><article><span>Retail goods</span><b>${Math.round(economy?.stockUnits ?? 0)}</b></article><article><span>Barters</span><b>${economy?.barters ?? 0}</b></article></div>
+    <div class="bank-analysis"><section><header><span>Account comparison</span><b>Largest balances</b></header>${barChart(accounts.slice().sort((left, right) => right.balance - left.balance).slice(0, 12).map((account) => ({ label: account.owner, value: Math.max(0, account.balance) })), formatCad)}</section><section><header><span>Business comparison</span><b>Operating cash</b></header>${barChart(businesses.slice().sort((left, right) => (right.cash ?? 0) - (left.cash ?? 0)).map((business) => ({ label: business.name, value: business.cash ?? 0 })), formatCad)}</section><section><header><span>Market prices</span><b>Average basket over days</b></header>${lineChart([{ label: "Average item", color: "#ffc857", values: (state.analytics?.prices ?? []).map((point) => point.averagePrice) }, { label: "Units sold", color: "#63d8e3", values: (state.analytics?.prices ?? []).map((point) => point.unitsSold) }], "Average prices and units sold")}</section></div>
     <div class="section-label"><span>All resident, household, and business accounts</span><b>${accounts.length}</b></div>
     <div class="bank-ledger">${accounts.map((account) => account.residentSlug
       ? `<button type="button" class="${h(account.ownerKind)}" data-resident="${h(account.residentSlug)}"><span class="account-mark">${h(account.ownerKind.slice(0, 1).toUpperCase())}</span><span><b>${h(account.owner)}</b><small>${h(account.name)} | ${h(account.type)} | ${h(account.status)}</small></span><em>${formatCad(account.balance)}</em></button>`
@@ -640,33 +860,46 @@ function renderExplorer(section: string): string {
 async function openExplorer(section: string, pushHistory = true): Promise<void> {
   if (!state) return;
   closeDossier();
+  activePropertySlug = "";
   const view = byId<HTMLElement>("explore-view");
   view.hidden = false;
-  const titles: Record<string, string> = { residents: "Residents", homes: "Homes", buildings: "Buildings", shops: "Shops & businesses", bank: "Bank & economy", calls: "Phone network", story: "Living story" };
+  const titles: Record<string, string> = { residents: "Residents", households: "Households", family: "Families", calls: "Phone network", places: "Places", homes: "Homes", buildings: "Work & civic places", shops: "Shops & businesses", bank: "Bank & economy", analytics: "Krabville Analytics Lab", story: "Living story", events: "Event ledger", seasons: "Seasons" };
   byId("explore-title").textContent = titles[section] ?? "Explore";
   const content = byId("explore-content");
   content.innerHTML = renderExplorer(section);
-  document.querySelectorAll<HTMLButtonElement>("[data-explore]").forEach((button) => button.classList.toggle("active", button.dataset.explore === section));
+  content.scrollTop = 0;
+  const people = ["residents", "households", "family", "calls"];
+  const places = ["places", "homes", "buildings", "shops"];
+  const story = ["story", "events", "seasons"];
+  const topRoute = people.includes(section) ? "residents" : places.includes(section) ? "places" : story.includes(section) ? "story" : section;
+  document.querySelectorAll<HTMLButtonElement>(".top-nav [data-explore]").forEach((button) => button.classList.toggle("active", button.dataset.explore === topRoute));
+  byId("map-home").classList.remove("active");
   if (pushHistory) history.pushState(null, "", `#/explore/${section}`);
 }
 
 async function openProperty(slug: string, pushHistory = true): Promise<void> {
   if (!slug) return;
+  activePropertySlug = slug;
   const view = byId<HTMLElement>("explore-view");
   view.hidden = false;
   byId("explore-title").textContent = "Building";
   const content = byId("explore-content");
+  content.scrollTop = 0;
   content.innerHTML = `<div class="loading-state">Opening the building ledger...</div>`;
   try {
     const detail: PropertyDetail = await fetchProperty(slug);
-    const frame = ((detail.interiorVariant % 12) + 12) % 12;
-    const column = frame % 4;
-    const row = Math.floor(frame / 4);
+    const [x, y] = interiorPosition(detail.interiorVariant);
+    const inventoryUnits = detail.inventory.reduce((sum, item) => sum + item.quantity, 0);
+    const inventoryCategories = new Set(detail.inventory.map((item) => item.category)).size;
+    const lowStockItems = detail.inventory.filter((item) => item.lowStock).length;
     byId("explore-title").textContent = detail.name;
     content.innerHTML = `<div class="building-detail-head"><div><span>${h(detail.type)} | ${h(detail.status)}</span><h3>${h(detail.name)}</h3><p>${h(detail.address)} | ${detail.condition}% condition | ${formatCad(detail.value)}</p></div><button data-focus-place="${h(detail.mapLocation)}">Show on map</button></div>
-      <div class="building-detail-grid"><div class="property-interior" style="--interior-x:${column * 100 / 3}%;--interior-y:${row * 50}%" role="img" aria-label="${h(detail.name)} interior"></div><section><div class="section-label"><span>Inside now</span><b>${detail.residents.length}</b></div><div class="inside-list">${detail.residents.map((resident) => `<button data-resident="${h(resident.slug)}"><b>${h(resident.name)}</b><span>${h(resident.activity)}</span><em>${h(resident.mood)}</em></button>`).join("") || `<div class="empty-state">The building is empty.</div>`}</div></section></div>
+      <div class="building-detail-grid"><div class="property-interior" style="--interior-x:${x}%;--interior-y:${y}%" role="group" aria-label="${h(detail.name)} live interior">${interiorActorMarkup(detail.residents, detail.slug)}</div><section><div class="section-label"><span>Inside now</span><b data-inside-count>${detail.residents.length}</b></div><div class="inside-list">${insideListMarkup(detail.residents)}</div></section></div>
+      <div class="inventory-summary"><article><span>Unique items</span><b>${detail.inventory.length}</b></article><article><span>Total units</span><b>${inventoryUnits.toLocaleString(undefined, { maximumFractionDigits: 1 })}</b></article><article><span>Categories</span><b>${inventoryCategories}</b></article><article><span>Low stock</span><b>${lowStockItems}</b></article></div>
       <div class="section-label"><span>${detail.business ? "Shop stock" : "Home inventory"}</span><b>${detail.inventory.length}</b></div>${inventoryGrid(detail.inventory)}
       <div class="section-label"><span>Building transactions</span><b>${detail.transactions.length}</b></div>${renderLedgerEntries(detail.transactions.map((entry) => ({ ...entry, title: entry.description })), "No business transactions recorded here.")}`;
+    document.querySelectorAll<HTMLButtonElement>(".top-nav [data-explore]").forEach((button) => button.classList.toggle("active", button.dataset.explore === "places"));
+    byId("map-home").classList.remove("active");
     if (pushHistory) history.pushState(null, "", `#/property/${encodeURIComponent(slug)}`);
   } catch (error) {
     content.innerHTML = `<div class="empty-state large"><b>Building ledger unavailable</b><p>${h(error instanceof Error ? error.message : "Please try again.")}</p><button data-retry-property="${h(slug)}">Retry</button></div>`;
@@ -675,7 +908,9 @@ async function openProperty(slug: string, pushHistory = true): Promise<void> {
 
 function closeExplorer(clearHash = true): void {
   byId<HTMLElement>("explore-view").hidden = true;
-  document.querySelectorAll<HTMLButtonElement>("[data-explore]").forEach((button) => button.classList.remove("active"));
+  activePropertySlug = "";
+  document.querySelectorAll<HTMLButtonElement>(".top-nav [data-explore]").forEach((button) => button.classList.remove("active"));
+  byId("map-home").classList.add("active");
   if (clearHash && location.hash.startsWith("#/")) history.replaceState(null, "", location.pathname + location.search);
 }
 
@@ -692,7 +927,8 @@ function render(value: KrabvilleState): void {
   lastFreshAt = Date.now();
   renderTop(value);
   renderRoster(value);
-  renderStory(value);
+  renderMapVote(value);
+  syncInteriorViews(value);
   if (world) world.update(value);
   else void ensureWorld();
   const lastEvent = value.events.at(-1);
@@ -902,54 +1138,17 @@ async function showSeason(id: number): Promise<void> {
   `;
 }
 
-for (const button of document.querySelectorAll<HTMLButtonElement>("[data-story-tab]")) {
-  button.addEventListener("click", () => {
-    storyTab = button.dataset.storyTab ?? "ledger";
-    document.querySelectorAll("[data-story-tab]").forEach((item) => item.classList.toggle("active", item === button));
-    if (state) renderStory(state);
-  });
-}
-
-byId("story-content").addEventListener("click", async (event) => {
-  if (!(event.target instanceof Element)) return;
-  const button = event.target.closest<HTMLButtonElement>("button");
-  if (!button) return;
-  if (button.dataset.resident !== undefined) {
-    void openResident(button.dataset.resident);
-    return;
-  }
-  if (button.dataset.choice !== undefined) {
-    if (!state?.poll) return;
-    button.disabled = true;
-    try {
-      await vote(state.poll.id, button.dataset.choice);
-      setTicker("vote", { title: "Your vote is in. You can change it until the poll closes." });
-      await refresh();
-    } catch (error) {
-      setTicker("alert", { title: error instanceof Error ? error.message : "Vote failed" });
-      button.disabled = false;
-    }
-    return;
-  }
-  if (button.dataset.place !== undefined) {
-    world?.focus(button.dataset.place);
-    showInterior(button.dataset.place || "Building");
-    byId("story-rail").classList.remove("open");
-    return;
-  }
-  if (button.hasAttribute("data-open-archive")) void openArchive();
-});
-
 for (const button of document.querySelectorAll<HTMLButtonElement>("[data-explore]")) {
   button.addEventListener("click", () => void openExplorer(button.dataset.explore ?? "residents"));
 }
 
-byId("explore-content").addEventListener("click", (event) => {
+byId("explore-content").addEventListener("click", async (event) => {
   if (!(event.target instanceof Element)) return;
   const button = event.target.closest<HTMLButtonElement>("button");
   if (!button) return;
-  if (button.dataset.resident) {
-    closeExplorer();
+  if (button.dataset.explore) {
+    void openExplorer(button.dataset.explore);
+  } else if (button.dataset.resident) {
     void openResident(button.dataset.resident);
   } else if (button.dataset.property) {
     void openProperty(button.dataset.property);
@@ -958,6 +1157,20 @@ byId("explore-content").addEventListener("click", (event) => {
     closeExplorer();
   } else if (button.dataset.retryProperty) {
     void openProperty(button.dataset.retryProperty, false);
+  } else if (button.dataset.choice) {
+    if (!state?.poll) return;
+    button.disabled = true;
+    try {
+      await vote(state.poll.id, button.dataset.choice);
+      setTicker("vote", { title: "Your vote is in. You can change it until the poll closes." });
+      await refresh();
+      void openExplorer("vote", false);
+    } catch (error) {
+      setTicker("alert", { title: error instanceof Error ? error.message : "Vote failed" });
+      button.disabled = false;
+    }
+  } else if (button.hasAttribute("data-open-archive")) {
+    void openArchive();
   }
 });
 
@@ -977,10 +1190,47 @@ byId("interior-occupants").addEventListener("click", (event) => {
   const resident = event.target.closest<HTMLButtonElement>("[data-resident]")?.dataset.resident;
   if (resident) { hideInterior(); void openResident(resident); }
 });
+byId("interior-art").addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const resident = event.target.closest<HTMLButtonElement>("[data-resident]")?.dataset.resident;
+  if (resident) { hideInterior(); void openResident(resident); }
+});
+byId("map-vote-trigger").addEventListener("click", () => {
+  if (!state?.poll || state.poll.status !== "open") return;
+  mapVoteOpen = !mapVoteOpen;
+  renderMapVote(state);
+});
+byId("map-vote-panel").addEventListener("click", async (event) => {
+  if (!(event.target instanceof Element) || !state?.poll) return;
+  const button = event.target.closest<HTMLButtonElement>("button");
+  if (!button) return;
+  if (button.hasAttribute("data-close-vote")) {
+    mapVoteOpen = false;
+    renderMapVote(state);
+    return;
+  }
+  if (!button.dataset.mapChoice) return;
+  button.disabled = true;
+  try {
+    await vote(state.poll.id, button.dataset.mapChoice);
+    localStorage.setItem(`kv-vote-${state.poll.id}`, button.dataset.mapChoice);
+    mapVoteOpen = false;
+    setTicker("vote", { title: "Your choice is saved for tomorrow." });
+    await refresh();
+  } catch (error) {
+    setTicker("alert", { title: error instanceof Error ? error.message : "Vote failed" });
+    button.disabled = false;
+  }
+});
 byId("archive-open").addEventListener("click", () => void openArchive());
 byId("archive-close").addEventListener("click", () => { byId("archive-view").hidden = true; });
 byId("roster-toggle").addEventListener("click", () => byId("resident-rail").classList.toggle("open"));
-byId("story-toggle").addEventListener("click", () => byId("story-rail").classList.toggle("open"));
+byId("map-home").addEventListener("click", () => {
+  closeDossier();
+  hideInterior();
+  byId<HTMLElement>("archive-view").hidden = true;
+  closeExplorer();
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -989,7 +1239,6 @@ document.addEventListener("keydown", (event) => {
   byId("archive-view").hidden = true;
   closeExplorer();
   byId("resident-rail").classList.remove("open");
-  byId("story-rail").classList.remove("open");
 });
 
 window.addEventListener("popstate", () => {

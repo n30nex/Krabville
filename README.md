@@ -1,11 +1,14 @@
 # Krabville KVsim v2
 
+[![CI](https://github.com/n30nex/Krabville/actions/workflows/ci.yml/badge.svg)](https://github.com/n30nex/Krabville/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-5fd6df.svg)](LICENSE)
+
 Krabville is a persistent, event-driven social simulation built for
 [Canadaverse](https://canadaverse.org). Residents follow roads between homes,
 workplaces, schools, shops, and public spaces while their needs, families,
 finances, goals, memories, beliefs, and relationships shape what happens next.
 
-![Krabville live town](docs/screenshots/krabville-1366x768.png)
+![Krabville live town](docs/screenshots/v2-map-desktop.png)
 
 ## A Season At A Glance
 
@@ -78,11 +81,11 @@ seed after completion so deterministic events can be replayed and audited.
 ## Model Lane
 
 Structured fiction jobs use **GPT-5.3 Codex Spark at low reasoning** first and
-**GPT-5.6 Luna at high reasoning** after one failed Spark attempt. The worker is
+**GPT-5.6 Luna at low reasoning** after one failed Spark attempt. The worker is
 single-threaded, invokes no tools, and cannot block world ticks. An attempt is
 reserved atomically before launch, including failed or interrupted calls.
 
-Each season has a hard ceiling of 150 attempts and a 500,000-token preflight
+Each season has a hard ceiling of 150 attempts and a 1,500,000-token preflight
 guard. When the allowance is exhausted, the public UI shows a degraded model
 lane and the deterministic simulation continues. No completed season can queue
 new model work, and the inference worker makes no calls after Season 20 locks.
@@ -90,13 +93,25 @@ new model work, and the inference worker makes no calls after Season 20 locks.
 ## Public Interface
 
 The desktop and mobile UI provides a pannable and zoomable town, minimap,
-weather and day/night lighting, occupied interiors, resident dossiers, needs,
-predicted actions, family and property views, finances, beliefs, relationship
-graphs, conversations, polls, story ledgers, model usage, and season archives.
+four-season animated weather and day/night lighting, 25 uniquely mapped live
+interiors with moving resident sprites, exterior place cards, RPG-style goods
+inventories, resident dossiers, needs, predicted actions, families, property,
+finances, beliefs, relationship graphs, conversations, map-native voting,
+story ledgers, a comprehensive Analytics Lab, model usage, and season archives.
 
-| Mobile | Wide desktop |
+### Feature Tour
+
+| Live interiors | Building directory |
 | --- | --- |
-| ![Krabville mobile view](docs/screenshots/krabville-375x812.png) | ![Krabville desktop view](docs/screenshots/krabville-1920x1080.png) |
+| ![Residents moving inside a unique home](docs/screenshots/v2-live-interior.png) | ![Building cards with exterior art and inventory totals](docs/screenshots/v2-places.png) |
+
+| RPG inventories | Simulated economy |
+| --- | --- |
+| ![Household inventory with generated item icons](docs/screenshots/v2-rpg-inventory.png) | ![Bank balances, business comparisons, and market history](docs/screenshots/v2-economy.png) |
+
+| Analytics Lab | Mobile world view |
+| --- | --- |
+| ![Population, needs, mood, occupancy, economy, and social analytics](docs/screenshots/v2-analytics-lab.png) | ![Full-height mobile Lagoon map with weather and voting](docs/screenshots/v2-mobile.png) |
 
 Additional QA captures are available at
 [800x480](docs/screenshots/krabville-800x480.png),
@@ -193,10 +208,16 @@ mkdir -p deploy/secrets
 python -c "import secrets; print(secrets.token_urlsafe(48))" > deploy/secrets/voter-secret
 
 docker compose --env-file deploy/.env build --pull
-docker compose --env-file deploy/.env up -d web engine
-docker compose --env-file deploy/.env --profile inference up -d inference
-docker compose --env-file deploy/.env ps
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env up -d web engine
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env --profile inference up -d inference
+docker compose -f compose.yaml -f compose.selfhost.yaml --env-file deploy/.env ps
 ```
+
+For a portable loopback-only deployment, include `compose.selfhost.yaml` in
+each command. The full clean-install, Codex device-login, reverse-proxy, and
+first-season walkthrough is in [Self-hosting KVsim v2](docs/SELF_HOSTING.md).
+Upgrade, backup, health, and rollback procedures are in
+[Operations](docs/OPERATIONS.md).
 
 Keep `KRABVILLE_FAKE_PROVIDER=true` for tests and accelerated soaks. A live
 operator-managed deployment explicitly sets it to `false` only after the

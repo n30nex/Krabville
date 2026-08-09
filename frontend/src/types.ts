@@ -68,6 +68,8 @@ export interface PropertySummary {
   interiorAvailable?: boolean;
   interiorVariant?: number;
   business?: { id?: number; slug?: string; name?: string; status?: string } | null;
+  inventoryItems?: number;
+  inventoryUnits?: number;
 }
 
 export interface InventoryItem {
@@ -78,6 +80,7 @@ export interface InventoryItem {
   price?: number;
   lowStock?: boolean;
   assetKey?: string;
+  assetIndex?: number;
 }
 
 export interface AccountSummary {
@@ -209,6 +212,8 @@ export interface KrabvilleState {
     coordinateSpace?: "legacy" | "map";
     mapAsset?: string;
     interiorsAsset?: string;
+    weatherAsset?: string;
+    inventoryAsset?: string;
   };
   season: null | {
     id: number;
@@ -223,7 +228,7 @@ export interface KrabvilleState {
     revealedSeed: string | null;
     modelLocked: boolean;
     modelDegraded: boolean;
-    weather: { condition?: string; temperatureC?: number; windKmh?: number };
+    weather: { condition?: string; temperatureC?: number; windKmh?: number; season?: string };
     startedAt: string | null;
     completedAt: string | null;
     completionReason: string;
@@ -287,7 +292,7 @@ export interface KrabvilleState {
     businesses?: Array<{
       id?: number; slug?: string; name: string; industry?: string; owner?: string; employees?: number;
       cash?: number; status?: string; propertySlug?: string; location?: string; inventoryUnits?: number;
-      lowStockItems?: number; sales?: number;
+      inventoryItems?: number; lowStockItems?: number; sales?: number;
     }>;
     accounts?: AccountSummary[];
     transactions?: Array<{ id: number; tick: number; category: string; description: string; amount: number }>;
@@ -311,6 +316,13 @@ export interface KrabvilleState {
     durationMinutes: number;
     summary: string;
   }>;
+  analytics?: {
+    relationships?: { pairs: number; interactions: number; affinity: number; trust: number; tension: number; familiarity: number };
+    strongestConnections?: Array<{ residentA: string; residentB: string; affinity: number; trust: number; tension: number; interactions: number }>;
+    inventoryByCategory?: Array<{ category: string; units: number; items: number }>;
+    movements?: Array<{ type: string; units: number; events: number }>;
+    prices?: Array<{ day: number; averagePrice: number; unitsSold: number }>;
+  };
   townEvents?: LedgerEntry[];
   seasonSummaries?: Array<{ id: number; number: number; status: string; headline?: string; progressPercent?: number }>;
   updatedAt: string;

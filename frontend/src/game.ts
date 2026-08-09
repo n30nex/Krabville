@@ -161,8 +161,10 @@ class LagoonScene extends Phaser.Scene {
   private state: KrabvilleState | null = null;
   private residents = new Map<string, ResidentView>();
   private selectedSlug: string | null = null;
+  private map!: Phaser.GameObjects.Image;
   private lighting!: Phaser.GameObjects.Rectangle;
   private weatherLayer!: Phaser.GameObjects.Container;
+  private seasonLayer!: Phaser.GameObjects.Container;
   private lightLayer!: Phaser.GameObjects.Container;
   private propLayer!: Phaser.GameObjects.Container;
   private buildingLayer!: Phaser.GameObjects.Container;
@@ -170,6 +172,7 @@ class LagoonScene extends Phaser.Scene {
   private dragging = false;
   private previousPointer: Point = [0, 0];
   private currentWeather = "";
+  private currentSeason = "";
   private readonly reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   constructor(
@@ -194,9 +197,13 @@ class LagoonScene extends Phaser.Scene {
       frameWidth: 192,
       frameHeight: 192,
     });
-    this.load.spritesheet("interiors", "/assets/interiors-v2.png", {
+    this.load.spritesheet("interiors", "/assets/interiors-v3.png", {
       frameWidth: 256,
       frameHeight: 256,
+    });
+    this.load.spritesheet("weather-seasons", "/assets/weather-seasons-v1.png", {
+      frameWidth: 128,
+      frameHeight: 128,
     });
   }
 
@@ -211,12 +218,14 @@ class LagoonScene extends Phaser.Scene {
       worldElement.dataset.worldWidth = String(WORLD_WIDTH);
       worldElement.dataset.worldHeight = String(WORLD_HEIGHT);
     }
-    this.add.image(0, 0, "lagoon-map").setOrigin(0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
+    this.map = this.add.image(0, 0, "lagoon-map").setOrigin(0).setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT);
     this.textures.get("lagoon-map").setFilter(Phaser.Textures.FilterMode.NEAREST);
+    this.textures.get("weather-seasons").setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.cameras.main.setRoundPixels(true);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.propLayer = this.add.container(0, 0).setDepth(70);
     this.buildingLayer = this.add.container(0, 0).setDepth(45);
+    this.seasonLayer = this.add.container(0, 0).setDepth(42);
     this.lightLayer = this.add.container(0, 0).setDepth(80);
     this.weatherLayer = this.add.container(0, 0).setDepth(90);
     this.lighting = this.add
@@ -231,6 +240,7 @@ class LagoonScene extends Phaser.Scene {
       .setZoom(Math.min(180 / WORLD_WIDTH, 92 / WORLD_HEIGHT))
       .centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2)
       .setBackgroundColor("rgba(3,12,18,.82)");
+    this.minimap.ignore([this.weatherLayer, this.seasonLayer, this.lightLayer, this.lighting]);
     this.fillMap();
     this.bindCameraControls();
     this.scale.on("resize", () => {
@@ -449,7 +459,7 @@ class LagoonScene extends Phaser.Scene {
       }
     }
     this.updateLighting(state);
-    this.updateWeather(state.season?.weather.condition ?? "clear");
+    this.updateWeather(state.season?.weather ?? {}, state.season?.number ?? 1);
     this.updateProps(state);
     this.updateBuildings(state);
     this.updateObjectScale();
@@ -526,30 +536,97 @@ class LagoonScene extends Phaser.Scene {
     }
   }
 
-  private updateWeather(condition: string): void {
-    if (condition === this.currentWeather) return;
-    this.currentWeather = condition;
-    this.weatherLayer.removeAll(true);
-    if (condition === "fog") {
-      this.weatherLayer.add(this.add.rectangle(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 0xd9f3f2, 0.22).setOrigin(0));
+  private clearLayer(layer: Phaser.GameObjects.Container): void {
+    this.tweens.killTweensOf(layer.list);
+    layer.removeAll(true);
+  }
+
+  private updateSeason(season: string): void {
+    if (season === this.currentSeason) return;
+    this.currentSeason = season;
+    this.clearLayer(this.seasonLayer);
+    this.map.clearTint();
+    const settings: Record<string, { tint: number; frames: number[]; count: number; alpha: number }> = {
+      spring: { tint: 0xd8ffe2, frames: [53, 63], count: 38, alpha: 0.76 },
+      summer: { tint: 0xffffff, frames: [33, 34, 39], count: 18, alpha: 0.38 },
+      fall: { tint: 0xffd39a, frames: [16, 18, 20, 52, 58], count: 52, alpha: 0.78 },
+      winter: { tint: 0xdcecff, frames: [48, 49, 54, 59, 62], count: 58, alpha: 0.82 },
+    };
+    const setting = settings[season] ?? settings.summer!;
+    this.map.setTint(setting.tint);
+    for (let index = 0; index < setting.count; index += 1) {
+      const x = (113 + index * 619) % WORLD_WIDTH;
+      const y = (71 + index * 353) % WORLD_HEIGHT;
+      const sprite = this.add.sprite(x, y, "weather-seasons", setting.frames[index % setting.frames.length])
+        .setScale(0.24 + (index % 4) * 0.035)
+        .setAlpha(setting.alpha)
+        .setRotation(((index % 7) - 3) * 0.08);
+      this.seasonLayer.add(sprite);
+    }
+    const worldElement = document.getElementById("world");
+    if (worldElement) worldElement.dataset.season = season;
+  }
+
+  private updateWeather(weather: { condition?: string; season?: string }, seasonNumber: number): void {
+    const condition = String(weather.condition ?? "clear").toLowerCase();
+    const season = String(weather.season ?? ["winter", "spring", "summer", "fall"][seasonNumber % 4] ?? "summer").toLowerCase();
+    this.updateSeason(season);
+    const weatherKey = `${season}:${condition}`;
+    if (weatherKey === this.currentWeather) return;
+    this.currentWeather = weatherKey;
+    this.clearLayer(this.weatherLayer);
+    const worldElement = document.getElementById("world");
+    if (worldElement) worldElement.dataset.weather = condition;
+    if (condition === "clear") {
+      const count = this.reducedMotion ? 5 : 16;
+      for (let index = 0; index < count; index += 1) {
+        const glint = this.add.sprite((index * 733) % WORLD_WIDTH, (index * 419) % WORLD_HEIGHT, "weather-seasons", 33 + index % 7).setScale(0.2).setAlpha(0.34);
+        this.weatherLayer.add(glint);
+        if (!this.reducedMotion) this.tweens.add({ targets: glint, alpha: 0.08, scale: 0.28, duration: 1600 + index * 37, yoyo: true, repeat: -1 });
+      }
       return;
     }
-    if (!condition.includes("rain") && condition !== "storm") return;
-    const count = this.reducedMotion ? 20 : 70;
-    for (let index = 0; index < count; index += 1) {
-      const x = Phaser.Math.Between(0, WORLD_WIDTH);
-      const y = Phaser.Math.Between(-100, WORLD_HEIGHT);
-      const drop = this.add.rectangle(x, y, 2, 18, 0x9edfff, condition === "storm" ? 0.62 : 0.42).setRotation(-0.22);
-      this.weatherLayer.add(drop);
-      if (!this.reducedMotion) {
-        this.tweens.add({
-          targets: drop,
-          x: x - 180,
-          y: WORLD_HEIGHT + 100,
-          duration: Phaser.Math.Between(1200, 2100),
-          repeat: -1,
-          delay: Phaser.Math.Between(0, 1400),
-        });
+    if (condition === "fog" || condition === "cloudy") {
+      const veil = this.add.rectangle(0, 0, WORLD_WIDTH, WORLD_HEIGHT, 0xd9f3f2, condition === "fog" ? 0.18 : 0.08).setOrigin(0);
+      this.weatherLayer.add(veil);
+      const count = this.reducedMotion ? 8 : 24;
+      for (let index = 0; index < count; index += 1) {
+        const cloud = this.add.sprite((index * 509) % WORLD_WIDTH, (index * 277) % WORLD_HEIGHT, "weather-seasons", 40 + index % 5).setScale(0.45 + index % 3 * 0.12).setAlpha(condition === "fog" ? 0.28 : 0.18);
+        this.weatherLayer.add(cloud);
+        if (!this.reducedMotion) this.tweens.add({ targets: cloud, x: cloud.x + 320, duration: 12000 + index * 180, repeat: -1, yoyo: true });
+      }
+      return;
+    }
+    if (condition === "rain" || condition === "storm") {
+      const count = this.reducedMotion ? 16 : 62;
+      for (let index = 0; index < count; index += 1) {
+        const drop = this.add.sprite((index * 347) % WORLD_WIDTH, -80 + (index * 193) % (WORLD_HEIGHT + 80), "weather-seasons", index % 8).setScale(0.16 + index % 3 * 0.04).setAlpha(condition === "storm" ? 0.74 : 0.52).setRotation(-0.18);
+        this.weatherLayer.add(drop);
+        if (!this.reducedMotion) this.tweens.add({ targets: drop, x: drop.x - 260, y: WORLD_HEIGHT + 120, duration: 1450 + index % 9 * 95, repeat: -1, delay: index * 31 });
+      }
+      if (condition === "storm") {
+        const flash = this.add.sprite(WORLD_WIDTH * 0.62, WORLD_HEIGHT * 0.28, "weather-seasons", 24).setScale(1.6).setAlpha(this.reducedMotion ? 0.5 : 0);
+        this.weatherLayer.add(flash);
+        if (!this.reducedMotion) this.tweens.add({ targets: flash, alpha: { from: 0, to: 0.82 }, duration: 90, hold: 80, yoyo: true, repeat: -1, repeatDelay: 3400 });
+      }
+      return;
+    }
+    if (condition === "snow" || condition === "first-snow") {
+      const count = this.reducedMotion ? 14 : 54;
+      for (let index = 0; index < count; index += 1) {
+        const flake = this.add.sprite((index * 401) % WORLD_WIDTH, -60 + (index * 227) % (WORLD_HEIGHT + 60), "weather-seasons", 8 + index % 6).setScale(0.13 + index % 4 * 0.035).setAlpha(0.78);
+        this.weatherLayer.add(flake);
+        if (!this.reducedMotion) this.tweens.add({ targets: flake, x: flake.x + (index % 2 ? 150 : -150), y: WORLD_HEIGHT + 100, rotation: Math.PI * 2, duration: 4300 + index % 8 * 260, repeat: -1, delay: index * 43 });
+      }
+      return;
+    }
+    if (condition === "windy") {
+      const frames = season === "fall" ? [16, 17, 18, 19, 20, 21, 22, 23] : [43, 44, 45, 46];
+      const count = this.reducedMotion ? 10 : 34;
+      for (let index = 0; index < count; index += 1) {
+        const gust = this.add.sprite(-80 + (index * 431) % (WORLD_WIDTH + 80), (index * 271) % WORLD_HEIGHT, "weather-seasons", frames[index % frames.length]).setScale(0.18 + index % 3 * 0.05).setAlpha(0.66);
+        this.weatherLayer.add(gust);
+        if (!this.reducedMotion) this.tweens.add({ targets: gust, x: WORLD_WIDTH + 100, y: gust.y + (index % 2 ? 90 : -90), rotation: index % 2 ? 1.2 : -1.2, duration: 3200 + index % 7 * 240, repeat: -1, delay: index * 47 });
       }
     }
   }
@@ -622,10 +699,7 @@ class LagoonScene extends Phaser.Scene {
   }
 
   fitMap(): void {
-    this.cameras.main.setZoom(this.minimumZoom()).centerOn(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
-    const element = document.getElementById("world");
-    if (element) element.dataset.cameraZoom = this.cameras.main.zoom.toFixed(4);
-    this.updateObjectScale();
+    this.fillMap();
   }
 
   private fillMap(): void {
