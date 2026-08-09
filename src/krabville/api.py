@@ -1082,7 +1082,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         yield
 
-    app = FastAPI(title="Krabville Public API", version="2.0.0", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="Krabville Public API", version="2.0.1", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["krab.canadaverse.org", "127.0.0.1", "localhost", "testserver"],

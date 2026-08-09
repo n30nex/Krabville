@@ -714,12 +714,41 @@ def _care_activity(link: dict[str, Any], needs: dict[str, float], *, caregiver: 
             return f"having lunch at {provider}"
         if needs.get("hygiene", 100) < 55:
             return f"getting cleaned up at {provider}"
+        if needs.get("social", 100) < 45:
+            return f"socializing with classmates at {provider}"
+        if needs.get("purpose", 100) < 45:
+            return f"studying at {provider}"
         return f"learning and playing at {provider}"
     if needs.get("hunger", 100) < 65:
         return f"feeding {name} a bottle" if caregiver else f"having a bottle with {link['caregiverName']}"
     if needs.get("hygiene", 100) < 55:
         return f"changing and washing {name}" if caregiver else f"being changed and washed by {link['caregiverName']}"
+    if not caregiver and needs.get("social", 100) < 45:
+        return f"socializing safely with {link['caregiverName']}"
     return f"caring for {name} at home" if caregiver else f"playing safely with {link['caregiverName']}"
+
+
+def _caregiver_activity(
+    link: dict[str, Any],
+    child_needs: dict[str, float],
+    caregiver_needs: dict[str, float],
+) -> str:
+    if child_needs.get("hunger", 100) < 30 or child_needs.get("hygiene", 100) < 25:
+        return _care_activity(link, child_needs, caregiver=True)
+    name = str(link["childName"])
+    options = (
+        ("hunger", 45, f"sharing a meal at home while {name} stays close"),
+        ("hygiene", 40, f"washing up while keeping {name} close by"),
+        ("energy", 35, f"napping beside {name}"),
+        ("privacy", 30, f"taking private time while keeping {name} close by"),
+        ("fun", 30, f"enjoying a favourite hobby beside {name}"),
+        ("social", 30, f"talking with a friend while keeping {name} close by"),
+        ("autonomy", 25, f"making a personal choice while keeping {name} close by"),
+    )
+    urgent = [option for option in options if caregiver_needs.get(option[0], 100) < option[1]]
+    if urgent:
+        return min(urgent, key=lambda option: caregiver_needs.get(option[0], 100) / option[1])[2]
+    return _care_activity(link, child_needs, caregiver=True)
 
 
 def _place_inside(
@@ -782,7 +811,7 @@ def _update_residents(connection: sqlite3.Connection, season: sqlite3.Row, tick:
                 key=lambda item: min(normalize_needs(loads(rows_by_id[item["childId"]]["needs_json"], {})).values()),
             )
             child_needs = normalize_needs(loads(rows_by_id[link["childId"]]["needs_json"], {}))
-            activity = _care_activity(link, child_needs, caregiver=True)
+            activity = _caregiver_activity(link, child_needs, needs)
             _place_inside(connection, int(season["id"]), int(row["id"]), str(link["home"]))
             if row["current_decision_id"]:
                 connection.execute(
