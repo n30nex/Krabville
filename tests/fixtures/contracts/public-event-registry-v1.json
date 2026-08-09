@@ -1,0 +1,30 @@
+{
+  "schema": "krabville.public-event",
+  "version": 1,
+  "eventKinds": [
+    "snapshot",
+    "tick",
+    "activity",
+    "decision",
+    "conversation",
+    "communication",
+    "relationship",
+    "relationship_change",
+    "town_event",
+    "micro_event",
+    "life_event",
+    "economy",
+    "purchase",
+    "housing",
+    "health",
+    "care_handoff",
+    "goal_change",
+    "poll",
+    "model_job",
+    "budget",
+    "chronicle",
+    "verified_chronicle",
+    "season",
+    "runtime_incident"
+  ]
+}

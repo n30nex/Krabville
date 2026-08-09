@@ -1,0 +1,12 @@
+{
+  "eventVersion": 1,
+  "seq": 9001,
+  "seasonId": 3,
+  "tick": 733,
+  "type": "decision",
+  "payload": {
+    "resident": "maya-lin",
+    "phase": "pondering"
+  },
+  "createdAt": "2026-08-09T15:00:00+00:00"
+}

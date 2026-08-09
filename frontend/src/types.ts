@@ -1,3 +1,5 @@
+import type { PublicStateEvent } from "./events";
+
 export type Point = [number, number];
 
 export interface DecisionFactor {
@@ -401,7 +403,7 @@ export interface KrabvilleState {
     reasoningTokens: number;
     models: Record<string, { calls: number; tokens: number }>;
   };
-  events: Array<{ seq: number; tick: number; type: string; payload: Record<string, unknown>; createdAt: string }>;
+  events: PublicStateEvent[];
   eventKinds?: string[];
   conversations: Array<{
     tick: number;
