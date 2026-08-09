@@ -1,9 +1,7 @@
 {
-  "baselineCommit": "c205fc584af2bb2b770f39b09908c070107c81f6",
+  "baselineCommit": "0910885cc137c3fc768c9a1645f22203bb681feb",
   "lint": [
     { "path": "src/krabville/api.py", "code": "F401", "message": "`pathlib.Path` imported but unused" },
-    { "path": "src/krabville/api.py", "code": "F401", "message": "`fastapi.Response` imported but unused" },
-    { "path": "src/krabville/api.py", "code": "F401", "message": "`fastapi.responses.JSONResponse` imported but unused" },
     { "path": "src/krabville/api.py", "code": "F401", "message": "`.db.dumps` imported but unused" },
     { "path": "src/krabville/cli.py", "code": "F401", "message": "`os` imported but unused" },
     { "path": "src/krabville/commerce_v2.py", "code": "F541", "message": "f-string without any placeholders" },
@@ -14,7 +12,6 @@
     { "path": "src/krabville/simulation_v2.py", "code": "F541", "message": "f-string without any placeholders" },
     { "path": "src/krabville/simulation_v2.py", "code": "F541", "message": "f-string without any placeholders" },
     { "path": "src/krabville/simulation_v2.py", "code": "F541", "message": "f-string without any placeholders" },
-    { "path": "src/krabville/world.py", "code": "F401", "message": "`datetime` imported but unused" },
     { "path": "src/krabville/world.py", "code": "F401", "message": "`json` imported but unused" },
     { "path": "src/krabville/world.py", "code": "F401", "message": "`.config.Settings` imported but unused" },
     { "path": "src/krabville/world.py", "code": "F541", "message": "f-string without any placeholders" },

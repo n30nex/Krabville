@@ -69,7 +69,9 @@ def main() -> int:
     current_lint = lint_findings()
     current_format = unformatted_files()
     new_lint = current_lint - expected_lint
+    stale_lint = expected_lint - current_lint
     new_format = current_format - expected_format
+    stale_format = expected_format - current_format
 
     print(
         "Ruff baseline: "
@@ -78,9 +80,21 @@ def main() -> int:
     )
     if new_lint:
         print("New Ruff lint findings:", *describe(new_lint), sep="\n  ")
+    if stale_lint:
+        print(
+            "Stale Ruff lint baseline entries; refresh the baseline:",
+            *describe(stale_lint),
+            sep="\n  ",
+        )
     if new_format:
         print("New Ruff formatting debt:", *sorted(new_format), sep="\n  ")
-    return 1 if new_lint or new_format else 0
+    if stale_format:
+        print(
+            "Stale Ruff formatting baseline entries; refresh the baseline:",
+            *sorted(stale_format),
+            sep="\n  ",
+        )
+    return 1 if new_lint or stale_lint or new_format or stale_format else 0
 
 
 if __name__ == "__main__":
