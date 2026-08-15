@@ -12,7 +12,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "lucide": "1.30.0",
+    "lucide": "1.31.0",
     "phaser": "3.90.0"
   },
   "devDependencies": {
