@@ -12,7 +12,7 @@ requires-python = ">=3.13"
 dependencies = [
   "fastapi==0.141.1",
   "pillow==12.3.0",
-  "uvicorn==0.52.1",
+  "uvicorn==0.52.3",
 ]
 
 [project.optional-dependencies]
