@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from krabville.api import create_app
 from krabville.db import dumps, initialize, now_iso
+from krabville.public_events import PUBLIC_EVENT_KINDS, PUBLIC_EVENT_VERSION
 from krabville.world import advance_tick, start_season
 
 
@@ -174,10 +175,7 @@ def test_empty_town_state_has_a_complete_public_schema(settings_factory) -> None
         assert payload["models"]["primary"] == "gpt-5.3-codex-spark"
         assert payload["residents"] == payload["events"] == payload["goals"] == []
         assert payload["lifeGoals"] == []
-        assert set(payload["eventKinds"]) == {
-            "goal_change", "purchase", "health", "care_handoff", "housing",
-            "relationship_change", "verified_chronicle",
-        }
+        assert payload["eventKinds"] == list(PUBLIC_EVENT_KINDS)
         assert payload["docket"]["entries"] == []
         assert payload["modelCircuits"]["summaryLabel"] == "Circuit telemetry unavailable"
 
@@ -364,7 +362,12 @@ def test_v22_public_read_fields_work_before_and_after_optional_migration(setting
         assert detail["housingRecovery"]["recoveryLabel"] == "Repayment"
         public_events = client.get("/api/v3/events?after=0&limit=500").json()
         assert set(event_kinds).issubset({item["type"] for item in public_events["events"]})
-        assert set(event_kinds) == set(public_events["eventKinds"])
+        assert public_events["eventKinds"] == list(PUBLIC_EVENT_KINDS)
+        assert all(
+            item["eventVersion"] == PUBLIC_EVENT_VERSION
+            and item["seasonId"] == season_id
+            for item in public_events["events"]
+        )
         archive = client.get(f"/api/v3/seasons/{season_id}").json()
         assert archive["ledgerVerification"]["verified"] == 1
         assert archive["epilogues"][0]["title"] == "A verified week-end record"

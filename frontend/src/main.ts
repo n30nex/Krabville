@@ -25,6 +25,7 @@ import {
 } from "lucide";
 
 import { connectEvents, fetchProperty, fetchResident, fetchSeason, fetchSeasons, fetchState, vote } from "./api";
+import type { PublicEventEnvelope } from "./events";
 import type { InventoryItem, KrabvilleState, LedgerEntry, Point, PropertyDetail, PublicNote, Resident, ResidentDetail } from "./types";
 import "./style.css";
 
@@ -41,16 +42,6 @@ const MAP_WIDTH = 4608;
 const MAP_HEIGHT = 3072;
 const LEGACY_MAP_WIDTH = 1774;
 const LEGACY_MAP_HEIGHT = 887;
-const V22_EVENT_KINDS = [
-  "goal_change",
-  "purchase",
-  "health",
-  "care_handoff",
-  "housing",
-  "relationship_change",
-  "verified_chronicle",
-] as const;
-
 type ExteriorSeason = "spring" | "summer" | "fall" | "winter";
 
 function exteriorSeasonForNumber(number = 1): ExteriorSeason {
@@ -288,6 +279,7 @@ let initialRouteApplied = false;
 let selectedSlug: string | null = null;
 let lastFreshAt = 0;
 let refreshPending: Promise<void> | null = null;
+let liveEvents: EventSource | null = null;
 let activePropertySlug = "";
 let mapVoteOpen = false;
 
@@ -1023,6 +1015,7 @@ function applyHashRoute(): void {
 function render(value: KrabvilleState): void {
   state = value;
   lastFreshAt = Date.now();
+  liveEvents ??= connectEvents(handleLiveEvent, value.eventKinds ?? []);
   renderTop(value);
   renderRoster(value);
   renderMapVote(value);
@@ -1049,9 +1042,9 @@ function setTicker(type: string, payload: Record<string, unknown>): void {
   byId("live-ticker").textContent = summary ? `${label}: ${String(summary)}` : `${label} recorded in the town ledger.`;
 }
 
-function handleLiveEvent(type: string, payload: Record<string, unknown>): void {
-  setTicker(type, payload);
-  if (!document.hidden) void refresh().then(() => setTicker(type, payload));
+function handleLiveEvent(event: PublicEventEnvelope): void {
+  setTicker(event.type, event.payload);
+  if (!document.hidden) void refresh().then(() => setTicker(event.type, event.payload));
 }
 
 async function refresh(): Promise<void> {
@@ -1378,18 +1371,6 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("popstate", () => {
   applyHashRoute();
 });
-
-const liveEvents = connectEvents(handleLiveEvent);
-for (const type of V22_EVENT_KINDS) {
-  liveEvents.addEventListener(type, (event) => {
-    try {
-      const value = JSON.parse((event as MessageEvent).data) as { payload?: Record<string, unknown> };
-      handleLiveEvent(type, value.payload ?? {});
-    } catch {
-      handleLiveEvent(type, {});
-    }
-  });
-}
 
 setInterval(() => {
   if (!document.hidden) void refresh();

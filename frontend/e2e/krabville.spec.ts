@@ -196,7 +196,7 @@ test("v2.2 public event kinds reach the live ticker", async ({ page }, testInfo)
       status: 200,
       contentType: "text/event-stream",
       headers: { "Cache-Control": "no-cache" },
-      body: 'id: 9001\nevent: verified_chronicle\ndata: {"payload":{"title":"Day 2 facts verified"}}\n\n',
+      body: 'id: 9001\nevent: verified_chronicle\ndata: {"tick":289,"payload":{"title":"Day 2 facts verified"},"createdAt":"2026-08-09T20:00:00Z"}\n\n',
     });
   });
   await page.goto("/");
